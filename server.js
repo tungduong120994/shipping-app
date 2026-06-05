@@ -212,6 +212,9 @@ async function getAllSheetGids(sheetId) {
     
     const detectedGids = [];
     
+    // List of known GIDs to always check (user's known sheets)
+    const knownGids = ['0', '1721394584', '793353259', '1853935368', '1868655219', '699711958'];
+    
     // Method 1: Try to parse HTML
     try {
       const url = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
@@ -242,38 +245,39 @@ async function getAllSheetGids(sheetId) {
         }
         
         if (foundGids.size > 0) {
-          console.log(`Found ${foundGids.size} sheets via HTML parsing`);
+          console.log(`Found ${foundGids.size} sheets via HTML parsing:`, Array.from(foundGids));
           return Array.from(foundGids).sort((a, b) => parseInt(a) - parseInt(b));
         }
       }
     } catch (e) {
-      console.log('HTML parsing failed, will try brute force method');
+      console.log('HTML parsing failed, will try known GIDs + brute force method');
     }
     
-    // Method 2: Brute force - try sequential GIDs and common patterns
-    console.log('Using brute force method to detect sheets...');
+    // Method 2: Check known GIDs + Brute force
+    console.log('Checking known GIDs and using brute force method...');
+    console.log('Known GIDs to check:', knownGids);
     
-    const gidsToTest = new Set();
-    
-    // Add GID 0 (first sheet)
-    gidsToTest.add('0');
+    const gidsToTest = new Set(knownGids);
     
     // Add sequential numbers 1-20
     for (let i = 1; i <= 20; i++) {
       gidsToTest.add(i.toString());
     }
     
-    // Add known large GID patterns
-    const largeGidPatterns = [1853935368, 1868655219, 699711958];
-    largeGidPatterns.forEach(gid => {
-      gidsToTest.add(gid.toString());
-      // Add neighbors around known GIDs
-      for (let i = -5; i <= 5; i++) {
-        if (gid + i > 0) {
-          gidsToTest.add((gid + i).toString());
+    // Add more potential GIDs by generating variations
+    knownGids.forEach(gid => {
+      if (gid !== '0') {
+        const numGid = parseInt(gid);
+        // Add neighbors around known GIDs
+        for (let i = -10; i <= 10; i++) {
+          if (numGid + i > 0) {
+            gidsToTest.add((numGid + i).toString());
+          }
         }
       }
     });
+    
+    console.log(`Testing ${gidsToTest.size} GIDs...`);
     
     // Test each GID
     for (const gid of gidsToTest) {
@@ -283,7 +287,7 @@ async function getAllSheetGids(sheetId) {
         
         if (csvResponse.ok) {
           const csv = await csvResponse.text();
-          // Check if we got real data (more than just headers)
+          // Check if we got any data (even just headers)
           const lines = csv.split('\n').filter(line => line.trim().length > 0);
           
           if (lines.length > 0) {
@@ -297,17 +301,18 @@ async function getAllSheetGids(sheetId) {
     }
     
     if (detectedGids.length === 0) {
-      console.warn('Could not detect any sheets');
-      return [];
+      console.warn('⚠️ Could not detect any sheets. Returning known GIDs as fallback:', knownGids);
+      return knownGids;
     }
     
-    const sortedGids = detectedGids.sort((a, b) => parseInt(a) - parseInt(b));
-    console.log(`Total sheets detected: ${sortedGids.length}`, sortedGids);
+    const sortedGids = [...new Set(detectedGids)].sort((a, b) => parseInt(a) - parseInt(b));
+    console.log(`✅ Total sheets detected: ${sortedGids.length}`, sortedGids);
     return sortedGids;
     
   } catch (error) {
     console.error('Error in getAllSheetGids:', error);
-    return [];
+    // Return known GIDs as fallback
+    return ['0', '1721394584', '793353259', '1853935368', '1868655219', '699711958'];
   }
 }
 
