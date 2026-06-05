@@ -208,29 +208,105 @@ app.get('/api/sheets/:sheetId', async (req, res) => {
 // Helper function to get all sheet GIDs from a Google Sheet
 async function getAllSheetGids(sheetId) {
   try {
-    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+    console.log('Starting to detect all sheets for:', sheetId);
+    
+    const detectedGids = [];
+    
+    // Method 1: Try to parse HTML
+    try {
+      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        },
+        timeout: 10000
+      });
+      
+      if (response.ok) {
+        const html = await response.text();
+        
+        // Try multiple regex patterns to find sheet IDs
+        const patterns = [
+          /"sheetId":(\d+)/g,
+          /"sheetId":"?(\d+)"?/g,
+          /gid[=?](\d+)/g,
+          /"index":\d+.*?"sheetId":(\d+)/g
+        ];
+        
+        const foundGids = new Set();
+        for (const pattern of patterns) {
+          let match;
+          while ((match = pattern.exec(html)) !== null) {
+            foundGids.add(match[1]);
+          }
+        }
+        
+        if (foundGids.size > 0) {
+          console.log(`Found ${foundGids.size} sheets via HTML parsing`);
+          return Array.from(foundGids).sort((a, b) => parseInt(a) - parseInt(b));
+        }
+      }
+    } catch (e) {
+      console.log('HTML parsing failed, will try brute force method');
+    }
+    
+    // Method 2: Brute force - try sequential GIDs and common patterns
+    console.log('Using brute force method to detect sheets...');
+    
+    const gidsToTest = new Set();
+    
+    // Add GID 0 (first sheet)
+    gidsToTest.add('0');
+    
+    // Add sequential numbers 1-20
+    for (let i = 1; i <= 20; i++) {
+      gidsToTest.add(i.toString());
+    }
+    
+    // Add known large GID patterns
+    const largeGidPatterns = [1853935368, 1868655219, 699711958];
+    largeGidPatterns.forEach(gid => {
+      gidsToTest.add(gid.toString());
+      // Add neighbors around known GIDs
+      for (let i = -5; i <= 5; i++) {
+        if (gid + i > 0) {
+          gidsToTest.add((gid + i).toString());
+        }
       }
     });
     
-    if (!response.ok) return [];
-
-    const html = await response.text();
-    
-    // Extract all sheet IDs using regex
-    const sheetRegex = /"sheetId":(\d+)/g;
-    const gids = new Set();
-    let match;
-
-    while ((match = sheetRegex.exec(html)) !== null) {
-      gids.add(match[1]);
+    // Test each GID
+    for (const gid of gidsToTest) {
+      try {
+        const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+        const csvResponse = await fetch(csvUrl, { timeout: 5000 });
+        
+        if (csvResponse.ok) {
+          const csv = await csvResponse.text();
+          // Check if we got real data (more than just headers)
+          const lines = csv.split('\n').filter(line => line.trim().length > 0);
+          
+          if (lines.length > 0) {
+            detectedGids.push(gid);
+            console.log(`✓ Found valid sheet with GID: ${gid} (${lines.length} rows)`);
+          }
+        }
+      } catch (e) {
+        // Continue to next GID
+      }
     }
-
-    return Array.from(gids).sort((a, b) => parseInt(a) - parseInt(b));
+    
+    if (detectedGids.length === 0) {
+      console.warn('Could not detect any sheets');
+      return [];
+    }
+    
+    const sortedGids = detectedGids.sort((a, b) => parseInt(a) - parseInt(b));
+    console.log(`Total sheets detected: ${sortedGids.length}`, sortedGids);
+    return sortedGids;
+    
   } catch (error) {
-    console.error('Error getting all sheet GIDs:', error);
+    console.error('Error in getAllSheetGids:', error);
     return [];
   }
 }
