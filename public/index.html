@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản Lý Vận Đơn</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        
+        /* Tab Navigation */
+        .tab-navigation { display: flex; border-bottom: 2px solid #ddd; margin-bottom: 20px; gap: 10px; }
+        .tab-button { padding: 12px 20px; background: none; border: none; cursor: pointer; font-size: 16px; border-bottom: 3px solid transparent; transition: all 0.3s; color: #666; }
+        .tab-button:hover { color: #007bff; }
+        .tab-button.active { color: #007bff; border-bottom-color: #007bff; font-weight: bold; }
+        
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+        input, textarea { margin: 10px 0; padding: 10px; width: 100%; box-sizing: border-box; border: 1px solid #ddd; border-radius: 4px; }
+        label { display: block; font-weight: bold; margin-top: 5px; margin-bottom: 5px; color: #333; }
+        button { padding: 10px 20px; margin-right: 10px; margin-top: 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        .results { margin-top: 20px; }
+        .result-group { margin: 15px 0; padding: 10px; background-color: #f9f9f9; border-left: 4px solid #007bff; }
+        .found { border-left-color: #28a745; }
+        .not-found { border-left-color: #dc3545; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .status-found { color: #28a745; font-weight: bold; }
+        .status-not-found { color: #dc3545; font-weight: bold; }
+        textarea { min-height: 150px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>� Hệ Thống Quản Lý Vận Đơn & Khách Hàng</h1>
+        
+        <div class="tab-navigation">
+            <button class="tab-button active" onclick="switchTab('shipments')">🚚 Quản Lý Vận Đơn</button>
+            <button class="tab-button" onclick="switchTab('invoice')">📋 Phiếu Xuất Kho</button>
+            <button class="tab-button" onclick="switchTab('customers')">👥 Quản Lý Khách Hàng</button>
+        </div>
+
+        <!-- Tab 1: Quản Lý Vận Đơn -->
+        <div id="tab-shipments" class="tab-content active">
+            <div class="section">
+                <h2>Nhập Danh Sách Mã Vận Đơn</h2>
+                <p>Nhập mã vận đơn (mỗi mã một dòng, mã trùng lặp và biến thể -1/-2 sẽ được chuẩn hóa tự động):</p>
+                <textarea id="codesInput" placeholder="301963305121
+301963305121-1
+301963305121-2
+VD6640(78983347038248)
+..."></textarea>
+                <button onclick="searchCodes()">🔍 Tìm Kiếm</button>
+                <p id="loadStatus"></p>
+            </div>
+
+            <div class="section results" id="results" style="display: none;">
+                <h2>Kết Quả Tìm Kiếm</h2>
+                <button onclick="exportResults()">📊 Export Excel</button>
+                <button onclick="exportCSV()">📄 Export CSV</button>
+                <div id="resultsList"></div>
+            </div>
+        </div>
+
+        <!-- Tab 2: Phiếu Xuất Kho -->
+        <div id="tab-invoice" class="tab-content">
+            <div class="section">
+                <h2>Tạo Phiếu Xuất Kho</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                    <div>
+                        <label>Chọn Khách Hàng:</label>
+                        <select id="invoiceCustomer" style="padding: 10px; width: 100%; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="">-- Chọn khách hàng --</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>SĐT Người Nhận:</label>
+                        <input type="text" id="invoicePhone" placeholder="Số điện thoại" />
+                    </div>
+                    <div>
+                        <label>Địa Chỉ Người Nhận:</label>
+                        <input type="text" id="invoiceAddress" placeholder="Địa chỉ" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Nhập Danh Sách Mã Vận Đơn</h2>
+                <p>Nhập mã vận đơn (mỗi mã một dòng):</p>
+                <textarea id="invoiceCodesInput" placeholder="301963305121
+301963305121-1
+..."></textarea>
+                <button onclick="searchInvoiceCodes()">🔍 Tìm Kiếm</button>
+                <p id="invoiceLoadStatus"></p>
+            </div>
+
+            <div class="section results" id="invoiceResults" style="display: none;">
+                <h2>Chi Tiết Phiếu Xuất Kho</h2>
+                <button onclick="exportInvoice()">📊 Xuất Phiếu Xuất Kho</button>
+                <button onclick="clearInvoiceResults()" style="background-color: #6c757d;">🔄 Xóa</button>
+                <div id="invoiceResultsList" style="margin-top: 15px;"></div>
+            </div>
+        </div>
+
+        <!-- Tab 3: Quản Lý Khách Hàng -->
+        <div id="tab-customers" class="tab-content">
+            <div class="section">
+                <h2>Thêm Khách Hàng Mới</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; margin-bottom: 15px;">
+                    <div>
+                        <label>Mã Khách Hàng:</label>
+                        <input type="text" id="customerCode" placeholder="VD: KH001" />
+                    </div>
+                    <div>
+                        <label>Mức Tối Thiểu (kg):</label>
+                        <input type="number" id="minLevel" placeholder="VD: 100" step="0.1" />
+                    </div>
+                    <div>
+                        <label>Giá Tiền/kg (VND):</label>
+                        <input type="number" id="pricePerWeight" placeholder="VD: 5000" step="0.1" />
+                    </div>
+                    <div style="display: flex; align-items: flex-end;">
+                        <button onclick="addCustomer()" style="width: 100%;">➕ Thêm</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Danh Sách Khách Hàng</h2>
+                <div id="customersList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
