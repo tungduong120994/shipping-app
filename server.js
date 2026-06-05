@@ -205,17 +205,59 @@ app.get('/api/sheets/:sheetId', async (req, res) => {
   }
 });
 
+// Helper function to get all sheet GIDs from a Google Sheet
+async function getAllSheetGids(sheetId) {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    });
+    
+    if (!response.ok) return [];
+
+    const html = await response.text();
+    
+    // Extract all sheet IDs using regex
+    const sheetRegex = /"sheetId":(\d+)/g;
+    const gids = new Set();
+    let match;
+
+    while ((match = sheetRegex.exec(html)) !== null) {
+      gids.add(match[1]);
+    }
+
+    return Array.from(gids).sort((a, b) => parseInt(a) - parseInt(b));
+  } catch (error) {
+    console.error('Error getting all sheet GIDs:', error);
+    return [];
+  }
+}
+
 // API endpoint to search for specific codes across multiple sheets
 app.post('/api/search-codes', async (req, res) => {
   try {
     const { sheetId, gids, codes } = req.body;
 
-    if (!sheetId || !gids || !codes || codes.length === 0) {
-      return res.json({ success: false, error: 'Missing parameters' });
+    if (!sheetId || !codes || codes.length === 0) {
+      return res.json({ success: false, error: 'Missing parameters: sheetId and codes required' });
+    }
+
+    // If gids not provided, automatically get all sheet GIDs
+    let gidArray;
+    if (gids && Array.isArray(gids) && gids.length > 0) {
+      gidArray = gids;
+      console.log(`Searching in ${gidArray.length} specified sheets`);
+    } else {
+      gidArray = await getAllSheetGids(sheetId);
+      if (gidArray.length === 0) {
+        return res.json({ success: false, error: 'Could not find any sheets in the spreadsheet' });
+      }
+      console.log(`Auto-detected ${gidArray.length} sheets. Searching in all of them...`);
     }
 
     const foundCodes = new Map();
-    const gidArray = Array.isArray(gids) ? gids : [gids];
 
     // Search in each sheet
     for (const gid of gidArray) {

@@ -1,6 +1,6 @@
 let searchResults = [];
 let sheetId = '1hLDE0Hy87ekRhf-1KUhXdrHHdH5LT176BG-0K4yHbaE';
-let gids = [0, 1868655219, 699711958, 1853935368];
+// Note: gids are now automatically detected by server, no need to specify them here
 
 // ==================== FORMATTING HELPERS ====================
 // Format date to show only day/month (e.g., "15/5")
@@ -130,7 +130,7 @@ function searchInvoiceCodes() {
     fetch('/api/search-codes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheetId, gids, codes })
+        body: JSON.stringify({ sheetId, codes })
     })
     .then(response => response.json())
     .then(result => {
@@ -387,7 +387,7 @@ function searchCodes() {
     fetch('/api/search-codes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheetId, gids, codes })
+        body: JSON.stringify({ sheetId, codes })
     })
     .then(response => response.json())
     .then(result => {
