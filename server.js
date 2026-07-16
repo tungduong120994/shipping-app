@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const { buildSheetGidCandidates } = require('./sheet-utils');
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -39,114 +40,13 @@ app.use(express.json());
 app.get('/api/sheet-ids/:sheetId', async (req, res) => {
   try {
     const { sheetId } = req.params;
+    const gids = await getAllSheetGids(sheetId);
 
-    // Fetch the HTML page to find sheet names and GIDs
-    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      }
-    });
-    
-    if (!response.ok) {
-      return res.json({ success: false, gids: [], message: 'Cannot fetch spreadsheet' });
-    }
-
-    const html = await response.text();
-    
-    // Extract sheet names and their corresponding data
-    // Look for pattern like "sheetId":123,"title":"T1/2026"
-    const sheetRegex = /"sheetId":(\d+),"title":"([^"]+)"/g;
-    const sheetMap = new Map();
-    let match;
-
-    while ((match = sheetRegex.exec(html)) !== null) {
-      const gid = match[1];
-      const name = match[2];
-      sheetMap.set(gid, name);
-    }
-
-    // If we found sheet names, return them
-    if (sheetMap.size > 0) {
-      const gids = Array.from(sheetMap.keys()).sort((a, b) => parseInt(a) - parseInt(b));
-      const sheetInfo = {};
-      gids.forEach(gid => {
-        sheetInfo[gid] = sheetMap.get(gid);
-      });
-      
-      return res.json({ 
-        success: true, 
+    if (gids && gids.length > 0) {
+      return res.json({
+        success: true,
         gids: gids,
-        sheets: sheetInfo
-      });
-    }
-
-    // Fallback: Try another regex pattern
-    const sheetRegex2 = /"index":\d+,"sheetId":(\d+).*?"title":"([^"]+)"/g;
-    while ((match = sheetRegex2.exec(html)) !== null) {
-      const gid = match[1];
-      const name = match[2];
-      sheetMap.set(gid, name);
-    }
-
-    if (sheetMap.size > 0) {
-      const gids = Array.from(sheetMap.keys()).sort((a, b) => parseInt(a) - parseInt(b));
-      const sheetInfo = {};
-      gids.forEach(gid => {
-        sheetInfo[gid] = sheetMap.get(gid);
-      });
-      
-      return res.json({ 
-        success: true, 
-        gids: gids,
-        sheets: sheetInfo
-      });
-    }
-
-    // Method 2: Brute force with smart GID guessing
-    const gidsToTry = new Set();
-    
-    // Add GID 0 and sequential numbers
-    for (let i = 0; i < 50; i++) {
-      gidsToTry.add(i.toString());
-    }
-    
-    // Add the known GID pattern
-    gidsToTry.add('1853935368');
-    
-    // Add more potential GIDs around the known one
-    const baseGid = 1853935368;
-    for (let i = -10; i <= 10; i++) {
-      if (baseGid + i > 0) {
-        gidsToTry.add((baseGid + i).toString());
-      }
-    }
-
-    const validGids = [];
-    console.log(`Testing ${gidsToTry.size} GIDs...`);
-    
-    // Check which GIDs actually have data
-    for (const gid of Array.from(gidsToTry)) {
-      try {
-        const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-        const csvResponse = await fetch(csvUrl, { timeout: 5000 });
-        const csv = await csvResponse.text();
-        
-        // Check if we got real data
-        const nonEmptyLines = csv.split('\n').filter(line => line.trim().length > 2);
-        if (nonEmptyLines.length > 2) {
-          validGids.push(gid);
-          console.log(`Found valid sheet with GID: ${gid}`);
-        }
-      } catch (e) {
-        // Skip failed requests
-      }
-    }
-
-    if (validGids.length > 0) {
-      return res.json({ 
-        success: true, 
-        gids: validGids.map(g => g.toString()).sort((a, b) => parseInt(a) - parseInt(b))
+        sheets: Object.fromEntries(gids.map((gid) => [gid, `Sheet ${gid}`]))
       });
     }
 
@@ -209,13 +109,17 @@ app.get('/api/sheets/:sheetId', async (req, res) => {
 async function getAllSheetGids(sheetId) {
   try {
     console.log('Starting to detect all sheets for:', sheetId);
-    
-    const detectedGids = [];
-    
-    // List of known GIDs to always check (user's known sheets)
+
     const knownGids = ['0', '1721394584', '793353259', '1853935368', '1868655219', '699711958'];
-    
-    // Method 1: Try to parse HTML
+    const detectedGids = new Set();
+
+    const addCandidate = (gid) => {
+      if (!gid) return;
+      const normalized = String(gid).trim();
+      if (!normalized) return;
+      detectedGids.add(normalized);
+    };
+
     try {
       const url = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
       const response = await fetch(url, {
@@ -224,74 +128,48 @@ async function getAllSheetGids(sheetId) {
         },
         timeout: 10000
       });
-      
+
       if (response.ok) {
         const html = await response.text();
-        
-        // Try multiple regex patterns to find sheet IDs
         const patterns = [
           /"sheetId":(\d+)/g,
           /"sheetId":"?(\d+)"?/g,
           /gid[=?](\d+)/g,
-          /"index":\d+.*?"sheetId":(\d+)/g
+          /"index":\d+.*?"sheetId":(\d+)/g,
+          /"gid":(\d+)/g
         ];
-        
-        const foundGids = new Set();
+
         for (const pattern of patterns) {
           let match;
           while ((match = pattern.exec(html)) !== null) {
-            foundGids.add(match[1]);
+            addCandidate(match[1]);
           }
         }
-        
-        if (foundGids.size > 0) {
-          console.log(`Found ${foundGids.size} sheets via HTML parsing:`, Array.from(foundGids));
-          return Array.from(foundGids).sort((a, b) => parseInt(a) - parseInt(b));
+
+        if (detectedGids.size > 0) {
+          console.log(`Found ${detectedGids.size} sheets via HTML parsing:`, Array.from(detectedGids));
         }
       }
     } catch (e) {
-      console.log('HTML parsing failed, will try known GIDs + brute force method');
+      console.log('HTML parsing failed, will try known GIDs + expanded brute force method');
     }
-    
-    // Method 2: Check known GIDs + Brute force
-    console.log('Checking known GIDs and using brute force method...');
-    console.log('Known GIDs to check:', knownGids);
-    
-    const gidsToTest = new Set(knownGids);
-    
-    // Add sequential numbers 1-20
-    for (let i = 1; i <= 20; i++) {
-      gidsToTest.add(i.toString());
-    }
-    
-    // Add more potential GIDs by generating variations
-    knownGids.forEach(gid => {
-      if (gid !== '0') {
-        const numGid = parseInt(gid);
-        // Add neighbors around known GIDs
-        for (let i = -10; i <= 10; i++) {
-          if (numGid + i > 0) {
-            gidsToTest.add((numGid + i).toString());
-          }
-        }
-      }
-    });
-    
-    console.log(`Testing ${gidsToTest.size} GIDs...`);
-    
-    // Test each GID
+
+    const gidsToTest = buildSheetGidCandidates(knownGids);
+    gidsToTest.forEach(addCandidate);
+
+    console.log('Testing expanded GID set:', gidsToTest.slice(0, 40), '... total', gidsToTest.length);
+
     for (const gid of gidsToTest) {
       try {
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
         const csvResponse = await fetch(csvUrl, { timeout: 5000 });
-        
+
         if (csvResponse.ok) {
           const csv = await csvResponse.text();
-          // Check if we got any data (even just headers)
           const lines = csv.split('\n').filter(line => line.trim().length > 0);
-          
+
           if (lines.length > 0) {
-            detectedGids.push(gid);
+            addCandidate(gid);
             console.log(`✓ Found valid sheet with GID: ${gid} (${lines.length} rows)`);
           }
         }
@@ -299,19 +177,17 @@ async function getAllSheetGids(sheetId) {
         // Continue to next GID
       }
     }
-    
-    if (detectedGids.length === 0) {
+
+    const sortedGids = Array.from(detectedGids).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    if (sortedGids.length === 0) {
       console.warn('⚠️ Could not detect any sheets. Returning known GIDs as fallback:', knownGids);
       return knownGids;
     }
-    
-    const sortedGids = [...new Set(detectedGids)].sort((a, b) => parseInt(a) - parseInt(b));
+
     console.log(`✅ Total sheets detected: ${sortedGids.length}`, sortedGids);
     return sortedGids;
-    
   } catch (error) {
     console.error('Error in getAllSheetGids:', error);
-    // Return known GIDs as fallback
     return ['0', '1721394584', '793353259', '1853935368', '1868655219', '699711958'];
   }
 }
