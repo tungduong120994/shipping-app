@@ -15,7 +15,27 @@ function createSheetService(fetchImpl, { timeoutMs = 15000, ttlMs = 60000 } = {}
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const response = await fetchImpl(url, { signal: controller.signal, size: 10 * 1024 * 1024 });
+        let response;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            response = await fetchImpl(url, { signal: controller.signal, size: 10 * 1024 * 1024 });
+          } catch (error) {
+            if (error.name === 'AbortError' || attempt === 2) throw error;
+            response = null;
+          }
+          const transient = !response || [429, 500, 502, 503, 504].includes(response.status);
+          if (!transient || attempt === 2) break;
+          // Release failed response streams before retrying within the same timeout.
+          if (response?.body?.destroy) response.body.destroy();
+          const retryAfter = Number(response?.headers?.get('retry-after'));
+          const delay = Math.min(1000, retryAfter > 0 ? retryAfter * 1000 : 300 * (attempt + 1));
+          await new Promise((resolve, reject) => {
+            const abort = () => { clearTimeout(wait); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); };
+            const wait = setTimeout(() => { controller.signal.removeEventListener('abort', abort); resolve(); }, delay);
+            controller.signal.addEventListener('abort', abort, { once: true });
+            if (controller.signal.aborted) abort();
+          });
+        }
         if (!response.ok) {
           const error = new Error(`Google Sheets trả lỗi HTTP ${response.status}`);
           error.remoteStatus = response.status; throw error;

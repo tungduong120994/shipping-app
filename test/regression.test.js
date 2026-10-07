@@ -66,6 +66,20 @@ test('CSV login pages are rejected', async () => {
   const service = createSheetService(async () => ({ ok: true, text: async () => '<html>Login</html>' }));
   await assert.rejects(service.loadSheet('spreadsheet', '0'), /đăng nhập/);
 });
+test('temporary Google failures retry while permission errors do not', async () => {
+  let calls = 0;
+  const service = createSheetService(async () => {
+    calls++;
+    return calls === 1 ? { ok: false, status: 503 }
+      : { ok: true, status: 200, text: async () => 'a,b\n1,2' };
+  });
+  assert.equal((await service.loadSheet('spreadsheet', '0')).rows.length, 2);
+  assert.equal(calls, 2);
+  calls = 0;
+  const denied = createSheetService(async () => { calls++; return { ok: false, status: 403 }; });
+  await assert.rejects(denied.loadSheet('spreadsheet', '0'), /403/);
+  assert.equal(calls, 1);
+});
 test('requests share cache promises and timeout aborts actual fetch', async () => {
   let calls = 0;
   const service = createSheetService(async () => { calls++; return { ok: true, text: async () => 'a,b\n1,2' }; });
