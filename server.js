@@ -1,514 +1,150 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-const { buildSheetGidCandidates } = require('./sheet-utils');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const { searchSheetRows } = require('./sheet-utils');
+const { createSheetService } = require('./sheet-service');
 const app = express();
+const sheets = createSheetService(fetch);
 const port = process.env.PORT || 3000;
-
-// Initialize SQLite database
-const db = new sqlite3.Database(path.join(__dirname, 'customers.db'), (err) => {
-  if (err) {
-    console.error('Error opening database:', err);
-  } else {
-    console.log('Connected to SQLite database');
-    // Create customers table if not exists
-    db.run(`
-      CREATE TABLE IF NOT EXISTS customers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
-        minLevel REAL NOT NULL,
-        pricePerWeight REAL NOT NULL,
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `, (err) => {
-      if (err) {
-        console.error('Error creating table:', err);
-      } else {
-        console.log('Customers table ready');
-      }
-    });
-  }
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'customers.db');
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+const db = new sqlite3.Database(dbPath);
+const revision = process.env.RENDER_GIT_COMMIT || process.env.APP_REVISION || 'local';
+app.disable('x-powered-by');
+app.get('/health', (req, res) => {
+  db.get('SELECT 1 AS ready', err => res.status(err ? 503 : 200).json({ ready: !err, revision }));
 });
-
-// Serve static files from the 'public' directory
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
-
-// API endpoint to get all sheet IDs (GID) from a Google Sheet by parsing sheet names
-app.get('/api/sheet-ids/:sheetId', async (req, res) => {
-  try {
-    const { sheetId } = req.params;
-    const gids = await getAllSheetGids(sheetId);
-
-    if (gids && gids.length > 0) {
-      return res.json({
-        success: true,
-        gids: gids,
-        sheets: Object.fromEntries(gids.map((gid) => [gid, `Sheet ${gid}`]))
-      });
-    }
-
-    res.json({ success: false, gids: [], message: 'No sheets found - try entering GIDs manually' });
-  } catch (error) {
-    console.error('Error in sheet-ids endpoint:', error);
-    res.json({ success: false, gids: [], message: error.message });
-  }
-});
-
-// API endpoint to fetch all sheets from Google Sheets
-app.get('/api/sheets/:sheetId', async (req, res) => {
-  try {
-    const { sheetId } = req.params;
-    const { gid } = req.query;
-
-    // Fetch CSV from Google Sheets
-    let url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-    if (gid) {
-      url += `&gid=${gid}`;
-    }
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      return res.status(400).json({ error: 'Cannot fetch data from Google Sheets' });
-    }
-
-    const csv = await response.text();
-    const lines = csv.split('\n').filter(line => line.trim());
-    
-    const data = lines.map(line => {
-      // Parse CSV carefully to handle quoted values
-      const cells = [];
-      let current = '';
-      let inQuotes = false;
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-          cells.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      cells.push(current.trim());
-      
-      return cells;
-    });
-
-    res.json({ success: true, data });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Helper function to get all sheet GIDs from a Google Sheet
-async function getAllSheetGids(sheetId) {
-  try {
-    console.log('Starting to detect all sheets for:', sheetId);
-
-    const knownGids = ['0', '1721394584', '793353259', '1853935368', '1868655219', '699711958'];
-    const detectedGids = new Set();
-
-    const addCandidate = (gid) => {
-      if (!gid) return;
-      const normalized = String(gid).trim();
-      if (!normalized) return;
-      detectedGids.add(normalized);
-    };
-
-    try {
-      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        },
-        timeout: 10000
-      });
-
-      if (response.ok) {
-        const html = await response.text();
-        const patterns = [
-          /"sheetId":(\d+)/g,
-          /"sheetId":"?(\d+)"?/g,
-          /gid[=?](\d+)/g,
-          /"index":\d+.*?"sheetId":(\d+)/g,
-          /"gid":(\d+)/g
-        ];
-
-        for (const pattern of patterns) {
-          let match;
-          while ((match = pattern.exec(html)) !== null) {
-            addCandidate(match[1]);
-          }
-        }
-
-        if (detectedGids.size > 0) {
-          console.log(`Found ${detectedGids.size} sheets via HTML parsing:`, Array.from(detectedGids));
-        }
-      }
-    } catch (e) {
-      console.log('HTML parsing failed, will try known GIDs + expanded brute force method');
-    }
-
-    const gidsToTest = buildSheetGidCandidates(knownGids);
-    gidsToTest.forEach(addCandidate);
-
-    console.log('Testing expanded GID set:', gidsToTest.slice(0, 40), '... total', gidsToTest.length);
-
-    for (const gid of gidsToTest) {
-      try {
-        const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-        const csvResponse = await fetch(csvUrl, { timeout: 5000 });
-
-        if (csvResponse.ok) {
-          const csv = await csvResponse.text();
-          const lines = csv.split('\n').filter(line => line.trim().length > 0);
-
-          if (lines.length > 0) {
-            addCandidate(gid);
-            console.log(`✓ Found valid sheet with GID: ${gid} (${lines.length} rows)`);
-          }
-        }
-      } catch (e) {
-        // Continue to next GID
-      }
-    }
-
-    const sortedGids = Array.from(detectedGids).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-    if (sortedGids.length === 0) {
-      console.warn('⚠️ Could not detect any sheets. Returning known GIDs as fallback:', knownGids);
-      return knownGids;
-    }
-
-    console.log(`✅ Total sheets detected: ${sortedGids.length}`, sortedGids);
-    return sortedGids;
-  } catch (error) {
-    console.error('Error in getAllSheetGids:', error);
-    return ['0', '1721394584', '793353259', '1853935368', '1868655219', '699711958'];
-  }
+// Optional access protection: configure both variables on the hosting service.
+if (Boolean(process.env.APP_USERNAME) !== Boolean(process.env.APP_PASSWORD)) {
+  throw new Error('APP_USERNAME và APP_PASSWORD phải được cấu hình cùng nhau');
 }
-
-// API endpoint to search for specific codes across multiple sheets
-app.post('/api/search-codes', async (req, res) => {
+if (process.env.APP_USERNAME && process.env.APP_PASSWORD) {
+  const expected = crypto.createHash('sha256').update(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).digest();
+  app.use((req, res, next) => {
+    const auth = req.get('authorization') || '';
+    const supplied = /^Basic /i.test(auth) ? Buffer.from(auth.slice(6), 'base64').toString('utf8') : '';
+    const actual = crypto.createHash('sha256').update(supplied).digest();
+    if (crypto.timingSafeEqual(expected, actual)) return next();
+    res.set('WWW-Authenticate', 'Basic realm="Shipping App", charset="UTF-8"');
+    res.status(401).send('Vui lòng đăng nhập');
+  });
+}
+app.use(express.json({ limit: '100kb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+const validSheetId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{10,200}$/.test(id);
+const validGid = gid => typeof gid === 'string' && /^\d{1,20}$/.test(gid);
+const invalid = (res, error) => res.status(400).json({ success: false, error });
+const remoteError = (res, error) => res.status(502).json({ success: false,
+  error: `Không thể hoàn tất tra cứu: ${error.message}. Kết quả chưa được dùng để lập phiếu.` });
+app.get('/api/sheet-ids/:sheetId', async (req, res) => {
+  if (!validSheetId(req.params.sheetId)) return invalid(res, 'ID Google Sheets không hợp lệ');
   try {
-    const { sheetId, gids, codes } = req.body;
-
-    if (!sheetId || !codes || codes.length === 0) {
-      return res.json({ success: false, error: 'Missing parameters: sheetId and codes required' });
-    }
-
-    // If gids not provided, automatically get all sheet GIDs
-    let gidArray;
-    if (gids && Array.isArray(gids) && gids.length > 0) {
-      gidArray = gids;
-      console.log(`Searching in ${gidArray.length} specified sheets`);
-    } else {
-      gidArray = await getAllSheetGids(sheetId);
-      if (gidArray.length === 0) {
-        return res.json({ success: false, error: 'Could not find any sheets in the spreadsheet' });
-      }
-      console.log(`Auto-detected ${gidArray.length} sheets. Searching in all of them...`);
-    }
-
-    const foundCodes = new Map();
-
-    // Search in each sheet
-    for (const gid of gidArray) {
-      let url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-      if (gid) {
-        url += `&gid=${gid}`;
-      }
-
-      const response = await fetch(url);
-      if (!response.ok) continue;
-
-      const csv = await response.text();
-      const lines = csv.split('\n').filter(line => line.trim());
-      
-      if (lines.length < 2) continue;
-
-      // Parse first row as header
-      const headerRow = lines[0].split(',');
-      
-      // Parse data rows starting from index 1
-      for (let rowIndex = 1; rowIndex < lines.length; rowIndex++) {
-        const line = lines[rowIndex];
-        if (!line.trim()) continue;
-
-        // Parse CSV carefully to handle quoted values
-        const cells = [];
-        let current = '';
-        let inQuotes = false;
-        
-        for (let i = 0; i < line.length; i++) {
-          const char = line[i];
-          if (char === '"') {
-            inQuotes = !inQuotes;
-          } else if (char === ',' && !inQuotes) {
-            cells.push(current.trim());
-            current = '';
-          } else {
-            current += char;
-          }
-        }
-        cells.push(current.trim());
-
-        // Normalize code function
-        const normalizeCode = (value) => {
-          let normalized = value.toString().trim();
-
-          // Extract inside parentheses if present
-          const parenMatch = normalized.match(/\(([^)]+)\)/);
-          if (parenMatch) {
-            normalized = parenMatch[1].trim();
-          }
-
-          // Normalize by removing suffix after first dash
-          if (normalized.includes('-')) {
-            normalized = normalized.split('-')[0].trim();
-          }
-
-          return normalized;
-        };
-
-        // Search through the row for the exact code, then weight is the next column.
-        // Track which codes have been found in this row to avoid duplicates
-        const foundInThisRow = new Set();
-        const isWeightCell = (value) => /^[0-9]+(?:[.,][0-9]+)?$/.test(value.toString().trim());
-
-        for (let colIndex = 0; colIndex < cells.length; colIndex++) {
-          const cellValue = cells[colIndex];
-          if (!cellValue || cellValue.trim() === '') continue;
-
-          codes.forEach(searchCode => {
-            const normalizedSearchCode = normalizeCode(searchCode);
-            const normalizedCellValue = normalizeCode(cellValue);
-
-            if (normalizedCellValue === normalizedSearchCode && !foundInThisRow.has(normalizedSearchCode)) {
-              foundInThisRow.add(normalizedSearchCode);
-
-              let canNang = '';
-              const nextCell = cells[colIndex + 1] || '';
-              const prevCell = cells[colIndex - 1] || '';
-
-              if (isWeightCell(nextCell)) {
-                canNang = nextCell;
-              } else if (isWeightCell(prevCell)) {
-                canNang = prevCell;
-              }
-
-              const rawDate = colIndex > 0 ? (headerRow[colIndex - 1] || 'N/A') : 'N/A';
-              const dateMatch = rawDate.toString().match(/(\d{1,2}\/\d{1,2})/);
-              const date = dateMatch ? dateMatch[1] : 'N/A';
-
-              const result = {
-                originalCode: cellValue, // Use actual cell value as original
-                code: normalizedSearchCode,
-                weight: canNang,
-                date: date,
-                maBao: cells[colIndex - 1] || '',
-                gid: gid  // Track which sheet this came from
-              };
-
-              // Collect all results for this normalized code
-              if (!foundCodes.has(normalizedSearchCode)) {
-                foundCodes.set(normalizedSearchCode, []);
-              }
-              foundCodes.get(normalizedSearchCode).push(result);
-            }
-          });
-        }
-      }
-    }
-
-    // Return results - group by code and sum weights
-    const found = [];
-    const notFound = [];
-
-    codes.forEach(code => {
-      if (foundCodes.has(code)) {
-        const results = foundCodes.get(code);
-        
-        // Group by gid (sheet) and get all occurrences per sheet
-        const resultsByGid = new Map();
-        results.forEach(result => {
-          if (!resultsByGid.has(result.gid)) {
-            resultsByGid.set(result.gid, []);
-          }
-          resultsByGid.get(result.gid).push(result);
-        });
-        
-        const numberOfSheets = resultsByGid.size;
-        let dedupedResults = [];
-        let countTotal = 0;
-        
-        // Logic: 
-        // - If code appears in ONLY 1 sheet: sum all occurrences (count them all, sum all weights)
-        // - If code appears in MULTIPLE sheets: take 1 from each sheet (count = number of sheets, sum weights from those 1s)
-        
-        if (numberOfSheets === 1) {
-          // Only in 1 sheet - use all occurrences and sum their weights
-          const sheetEntries = Array.from(resultsByGid.entries());
-          dedupedResults = sheetEntries[0][1];  // Get all results from the only sheet
-          countTotal = dedupedResults.length;
-        } else {
-          // In multiple sheets - take only 1 from each sheet
-          resultsByGid.forEach((sheetResults, gid) => {
-            dedupedResults.push(sheetResults[0]);
-          });
-          countTotal = dedupedResults.length;
-        }
-        
-        const uniqueOriginalCodes = [...new Set(dedupedResults.map(r => r.originalCode))];
-        
-        const groupedResult = {
-          code: code,
-          originalCodes: uniqueOriginalCodes,
-          weight: dedupedResults[0].weight, // Keep original format from first result
-          date: dedupedResults[0].date,
-          maBao: dedupedResults[0].maBao,
-          count: countTotal,
-          totalWeight: dedupedResults.reduce((sum, item) => {
-            const weight = parseFloat(item.weight.replace(',', '.'));
-            return sum + (isNaN(weight) ? 0 : weight);
-          }, 0).toFixed(2).replace('.', ',')
-        };
-        
-        found.push(groupedResult);
-      } else {
-        notFound.push(code);
-      }
-    });
-
-    res.json({ success: true, found, notFound });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    const gids = await sheets.discover(req.params.sheetId);
+    res.json({ success: true, gids, sheets: Object.fromEntries(gids.map(gid => [gid, `Sheet ${gid}`])) });
+  } catch (error) { remoteError(res, error); }
 });
-
-// API endpoints for customer management
-// Get all customers
+app.get('/api/sheets/:sheetId', async (req, res) => {
+  const { sheetId } = req.params;
+  const gid = req.query.gid === undefined ? '0' : req.query.gid;
+  if (!validSheetId(sheetId) || !validGid(gid)) return invalid(res, 'ID sheet hoặc GID không hợp lệ');
+  try { res.json({ success: true, data: (await sheets.loadSheet(sheetId, gid)).rows }); }
+  catch (error) { remoteError(res, error); }
+});
+app.post('/api/search-codes', async (req, res) => {
+  const { sheetId, codes, gids } = req.body || {};
+  if (!validSheetId(sheetId) || !Array.isArray(codes) || !codes.length || codes.length > 1000 ||
+      codes.some(code => typeof code !== 'string' || !code.trim() || code.length > 200)) {
+    return invalid(res, 'Cần ID Google Sheets và danh sách từ 1 đến 1000 mã vận đơn hợp lệ');
+  }
+  if (gids !== undefined && (!Array.isArray(gids) || gids.length > 100 || gids.some(gid => !validGid(gid)))) {
+    return invalid(res, 'Danh sách GID không hợp lệ');
+  }
+  try {
+    const selected = gids && gids.length ? [...new Set(gids)] : undefined;
+    const data = await sheets.loadSheets(sheetId, selected);
+    res.json({ success: true, ...searchSheetRows(data, codes) });
+  } catch (error) { remoteError(res, error); }
+});
+function customerInput(body) {
+  if (!body || typeof body.code !== 'string' || !body.code.trim() || body.code.trim().length > 100) return null;
+  const number = value => {
+    if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') return NaN;
+    return Number(value);
+  };
+  const minLevel = number(body.minLevel), pricePerWeight = number(body.pricePerWeight);
+  if (!Number.isFinite(minLevel) || minLevel < 0 || !Number.isFinite(pricePerWeight) || pricePerWeight <= 0) return null;
+  return { code: body.code.trim(), minLevel, pricePerWeight };
+}
+function dbError(res, err) {
+  if (err.message.includes('UNIQUE constraint failed')) return invalid(res, 'Mã khách hàng đã tồn tại');
+  console.error('Database operation failed:', err.code);
+  res.status(500).json({ success: false, error: 'Không thể lưu hoặc đọc dữ liệu khách hàng' });
+}
 app.get('/api/customers', (req, res) => {
-  db.all('SELECT * FROM customers ORDER BY createdAt DESC', (err, rows) => {
-    if (err) {
-      console.error('Database error when getting customers:', err);
-      return res.status(500).json({ success: false, error: err.message });
-    }
-    console.log('Retrieved customers from database:', rows || []);
-    res.json({ success: true, customers: rows || [] });
+  db.all('SELECT * FROM customers ORDER BY createdAt DESC, id DESC', (err, rows) => {
+    if (err) return dbError(res, err);
+    res.json({ success: true, customers: rows });
   });
 });
-
-// Add a new customer
 app.post('/api/customers', (req, res) => {
-  try {
-    const { code, minLevel, pricePerWeight } = req.body;
-
-    if (!code || minLevel === undefined || pricePerWeight === undefined) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: code, minLevel, pricePerWeight' });
-    }
-
-    const query = 'INSERT INTO customers (code, minLevel, pricePerWeight) VALUES (?, ?, ?)';
-    db.run(query, [code.trim(), parseFloat(minLevel), parseFloat(pricePerWeight)], function(err) {
-      if (err) {
-        console.error('Database error when adding customer:', err);
-        if (err.message.includes('UNIQUE constraint failed')) {
-          return res.status(400).json({ success: false, error: 'Mã khách hàng đã tồn tại' });
-        }
-        return res.status(500).json({ success: false, error: err.message });
-      }
-
-      const newCustomer = {
-        id: this.lastID,
-        code: code.trim(),
-        minLevel: parseFloat(minLevel),
-        pricePerWeight: parseFloat(pricePerWeight),
-        createdAt: new Date().toISOString()
-      };
-
-      console.log('Customer added to database:', newCustomer);
-      res.json({ success: true, customer: newCustomer, message: 'Khách hàng được thêm thành công' });
+  const customer = customerInput(req.body);
+  if (!customer) return invalid(res, 'Mã khách hàng không được trống; mức tối thiểu phải ≥ 0 và đơn giá phải > 0');
+  const { code, minLevel, pricePerWeight } = customer;
+  db.run('INSERT INTO customers (code, minLevel, pricePerWeight) VALUES (?, ?, ?)',
+    [code, minLevel, pricePerWeight], function (err) {
+      if (err) return dbError(res, err);
+      db.get('SELECT * FROM customers WHERE id = ?', [this.lastID], (error, row) => {
+        if (error) return dbError(res, error);
+        res.json({ success: true, customer: row, message: 'Khách hàng được thêm thành công' });
+      });
     });
-  } catch (error) {
-    console.error('Error in POST /api/customers:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
 });
-
-// Update a customer
+app.param('id', (req, res, next, id) => {
+  if (!/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) < 1) return invalid(res, 'ID khách hàng không hợp lệ');
+  next();
+});
 app.put('/api/customers/:id', (req, res) => {
-  try {
-    const { id } = req.params;
-    const { code, minLevel, pricePerWeight } = req.body;
-
-    if (!code || minLevel === undefined || pricePerWeight === undefined) {
-      return res.status(400).json({ success: false, error: 'Missing required fields' });
-    }
-
-    const query = 'UPDATE customers SET code = ?, minLevel = ?, pricePerWeight = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?';
-    db.run(query, [code.trim(), parseFloat(minLevel), parseFloat(pricePerWeight), id], function(err) {
-      if (err) {
-        if (err.message.includes('UNIQUE constraint failed')) {
-          return res.status(400).json({ success: false, error: 'Mã khách hàng đã tồn tại' });
-        }
-        return res.status(500).json({ success: false, error: err.message });
-      }
-
-      if (this.changes === 0) {
-        return res.status(404).json({ success: false, error: 'Không tìm thấy khách hàng' });
-      }
-
-      db.get('SELECT * FROM customers WHERE id = ?', [id], (err, row) => {
-        if (err) {
-          return res.status(500).json({ success: false, error: err.message });
-        }
+  const customer = customerInput(req.body);
+  if (!customer) return invalid(res, 'Mã khách hàng không được trống; mức tối thiểu phải ≥ 0 và đơn giá phải > 0');
+  const { code, minLevel, pricePerWeight } = customer;
+  db.run('UPDATE customers SET code = ?, minLevel = ?, pricePerWeight = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+    [code, minLevel, pricePerWeight, req.params.id], function (err) {
+      if (err) return dbError(res, err);
+      if (!this.changes) return res.status(404).json({ success: false, error: 'Không tìm thấy khách hàng' });
+      db.get('SELECT * FROM customers WHERE id = ?', [req.params.id], (error, row) => {
+        if (error) return dbError(res, error);
         res.json({ success: true, customer: row, message: 'Cập nhật khách hàng thành công' });
       });
     });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
 });
-
-// Delete a customer
 app.delete('/api/customers/:id', (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const query = 'DELETE FROM customers WHERE id = ?';
-    db.run(query, [id], function(err) {
-      if (err) {
-        return res.status(500).json({ success: false, error: err.message });
-      }
-
-      if (this.changes === 0) {
-        return res.status(404).json({ success: false, error: 'Không tìm thấy khách hàng' });
-      }
-
-      res.json({ success: true, message: 'Xóa khách hàng thành công' });
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
-
-// Close database on server shutdown
-process.on('SIGINT', () => {
-  console.log('\nClosing database...');
-  db.close((err) => {
-    if (err) {
-      console.error('Error closing database:', err);
-    } else {
-      console.log('Database closed');
-    }
-    process.exit(0);
+  db.run('DELETE FROM customers WHERE id = ?', [req.params.id], function (err) {
+    if (err) return dbError(res, err);
+    if (!this.changes) return res.status(404).json({ success: false, error: 'Không tìm thấy khách hàng' });
+    res.json({ success: true, message: 'Xóa khách hàng thành công' });
   });
 });
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed' || err.type === 'entity.too.large') return invalid(res, 'Dữ liệu JSON không hợp lệ hoặc quá lớn');
+  console.error('Request failed:', err.message);
+  res.status(500).json({ success: false, error: 'Lỗi xử lý yêu cầu' });
+});
+let server;
+db.run(`CREATE TABLE IF NOT EXISTS customers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL,
+  minLevel REAL NOT NULL, pricePerWeight REAL NOT NULL,
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+)`, err => {
+  if (err) { console.error('Cannot initialize database:', err.message); process.exitCode = 1; db.close(); return; }
+  server = app.listen(port, () => console.log(`Shipping app listening on port ${port}`));
+});
+function shutdown() {
+  if (!server) return db.close();
+  server.close(() => db.close());
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

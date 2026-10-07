@@ -1,4 +1,20 @@
 let searchResults = [];
+let shipmentRequest = 0, invoiceRequest = 0;
+let shipmentController, invoiceController;
+function inputCodes(id) {
+    return [...new Set(document.getElementById(id).value.split(/\r?\n/)
+        .map(AppUtils.normalizeInputCode).filter(Boolean))];
+}
+async function requestCodes(codes, signal) {
+    const response = await fetch('/api/search-codes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sheetId, codes }), signal
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(result.error || 'Không thể đọc dữ liệu Google Sheets');
+    return result;
+}
+
 let sheetId = '1hLDE0Hy87ekRhf-1KUhXdrHHdH5LT176BG-0K4yHbaE';
 // Note: gids are now automatically detected by server, no need to specify them here
 
@@ -21,11 +37,7 @@ function formatMoney(value) {
     return parseFloat(value).toLocaleString('vi-VN');
 }
 
-function normalizeVND(value) {
-    const number = parseFloat(value);
-    if (isNaN(number) || number === 0) return 0;
-    return number > 0 && number < 1000 ? number * 1000 : number;
-}
+function normalizeVND(value) { return AppUtils.normalizeVND(value); }
 
 function formatExcelNumber(value) {
     const number = Number(value);
@@ -33,28 +45,26 @@ function formatExcelNumber(value) {
     return number.toLocaleString('en-US', { maximumFractionDigits: 2, useGrouping: false });
 }
 
-function roundUpToOneDecimal(num) {
-    return Math.ceil(num * 10) / 10;
-}
+function roundUpToOneDecimal(num) { return AppUtils.roundUpToOneDecimal(num); }
 
 // ==================== TAB NAVIGATION ====================
-function switchTab(tabName) {
+function switchTab(tabName, clickEvent) {
     // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.remove('active');
     });
-    
+
     // Deactivate all buttons
     document.querySelectorAll('.tab-button').forEach(btn => {
         btn.classList.remove('active');
     });
-    
+
     // Show selected tab
     document.getElementById('tab-' + tabName).classList.add('active');
-    
+
     // Activate selected button
-    event.target.classList.add('active');
-    
+    if (clickEvent) clickEvent.currentTarget.classList.add('active');
+
     // Load customers if switching to customers tab or invoice tab
     if (tabName === 'customers') {
         loadCustomers();
@@ -68,19 +78,18 @@ let invoiceResults = [];
 
 // Load customers for invoice dropdown
 function loadInvoiceCustomers() {
-    console.log('Loading customers for invoice dropdown');
+    clearInvoiceSearch();
     fetch('/api/customers')
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                console.log('Loaded customers for invoice:', data.customers);
                 const select = document.getElementById('invoiceCustomer');
                 select.innerHTML = '<option value="">-- Chọn khách hàng --</option>';
                 data.customers.forEach(customer => {
                     const option = document.createElement('option');
                     const normalizedPrice = normalizeVND(customer.pricePerWeight);
                     option.value = customer.id;
-                    option.textContent = `${customer.code} (${customer.minLevel}kg - ${formatMoney(normalizedPrice)}đ/kg)`;
+                    option.textContent = `${customer.code} (tối thiểu ${formatMoney(customer.minLevel)}đ - ${formatMoney(normalizedPrice)}đ/kg)`;
                     option.dataset.minLevel = customer.minLevel;
                     option.dataset.pricePerWeight = normalizedPrice;
                     option.dataset.code = customer.code;
@@ -92,73 +101,38 @@ function loadInvoiceCustomers() {
 }
 
 // Search codes for invoice
-function searchInvoiceCodes() {
-    const customerId = document.getElementById('invoiceCustomer').value.trim();
-    const codesInput = document.getElementById('invoiceCodesInput').value.trim();
-
-    if (!customerId) {
-        alert('Vui lòng chọn khách hàng!');
-        return;
+async function searchInvoiceCodes() {
+    const customerId = document.getElementById('invoiceCustomer').value;
+    const codes = inputCodes('invoiceCodesInput');
+    if (!customerId || !codes.length) { alert('Vui lòng chọn khách hàng và nhập mã vận đơn!'); return; }
+    if (codes.length > 1000) { alert('Mỗi lần chỉ tra cứu tối đa 1000 mã'); return; }
+    clearInvoiceSearch();
+    const requestId = invoiceRequest;
+    invoiceController = new AbortController();
+    const status = document.getElementById('invoiceLoadStatus');
+    status.innerText = '⏳ Đang tìm kiếm ' + codes.length + ' mã...';
+    try {
+        const result = await requestCodes(codes, invoiceController.signal);
+        if (requestId !== invoiceRequest || document.getElementById('invoiceCustomer').value !== customerId) return;
+        invoiceResults = result;
+        displayInvoiceResults();
+        status.innerText = '✅ Tìm thấy ' + result.found.length + '/' + codes.length + ' mã';
+    } catch (error) {
+        if (requestId !== invoiceRequest || error.name === 'AbortError') return;
+        status.innerText = '❌ ' + error.message;
     }
-
-    if (!codesInput) {
-        alert('Vui lòng nhập ít nhất một mã vận đơn!');
-        return;
-    }
-
-    // Normalize codes
-    const normalizeInputCode = (code) => {
-        let normalized = code.trim();
-        const parenMatch = normalized.match(/\(([^)]+)\)/);
-        if (parenMatch) {
-            normalized = parenMatch[1].trim();
-        }
-        if (normalized.includes('-')) {
-            normalized = normalized.split('-')[0].trim();
-        }
-        return normalized;
-    };
-
-    const codes = [...new Set(
-        codesInput.split('\n')
-            .map(code => normalizeInputCode(code))
-            .filter(code => code)
-    )];
-    
-    document.getElementById('invoiceLoadStatus').innerText = `⏳ Đang tìm kiếm ${codes.length} mã...`;
-
-    fetch('/api/search-codes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheetId, codes })
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            invoiceResults = result;
-            displayInvoiceResults();
-            document.getElementById('invoiceLoadStatus').innerText = `✅ Tìm thấy ${result.found.length}/${codes.length} mã`;
-        } else {
-            alert('Lỗi: ' + result.error);
-            document.getElementById('invoiceLoadStatus').innerText = `❌ Lỗi: ${result.error}`;
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        document.getElementById('invoiceLoadStatus').innerText = `❌ Lỗi: ${error.message}`;
-    });
 }
 
 // Display invoice results with calculations
 function displayInvoiceResults() {
     const resultsList = document.getElementById('invoiceResultsList');
     const resultsDiv = document.getElementById('invoiceResults');
-    
+
     // Get selected customer data
     const select = document.getElementById('invoiceCustomer');
     const selectedOption = select.options[select.selectedIndex];
     const minPrice = parseFloat(selectedOption.dataset.minLevel) || 0;
-    const pricePerWeight = normalizeVND(selectedOption.dataset.pricePerWeight) || 0;
+    const pricePerWeight = Number(selectedOption.dataset.pricePerWeight) || 0;
     const customerCode = selectedOption.dataset.code || '';
 
     let html = `<table>
@@ -183,14 +157,14 @@ function displayInvoiceResults() {
             const price = actualWeight * pricePerWeight;
             // Nếu thành tiền < mức tối thiểu, tính mức tối thiểu
             const finalPrice = Math.max(price, minPrice);
-            
+
             totalPayment += finalPrice;
 
             html += `<tr>
                 <td>${stt}</td>
-                <td>${item.code}</td>
+                <td>${AppUtils.escapeHTML(item.code)}</td>
                 <td>${actualWeight.toFixed(1)}</td>
-                <td>${formatDate(item.date)}</td>
+                <td>${AppUtils.escapeHTML(formatDate(item.date))}</td>
                 <td>${formatMoney(pricePerWeight)}</td>
                 <td>${formatMoney(price)}</td>
                 <td>${formatMoney(minPrice)}</td>
@@ -210,7 +184,7 @@ function displayInvoiceResults() {
 
     if (invoiceResults.notFound && invoiceResults.notFound.length > 0) {
         html += `<div style="margin-top: 20px; padding: 10px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px;">
-            <strong>❌ Mã không tìm được:</strong> ${invoiceResults.notFound.join(', ')}
+            <strong>❌ Mã không tìm được:</strong> ${AppUtils.escapeHTML(invoiceResults.notFound.join(', '))}
         </div>`;
     }
 
@@ -236,7 +210,7 @@ function exportInvoice() {
     const resultsList = document.getElementById('invoiceResultsList');
     const totalPayment = parseFloat(resultsList.dataset.totalPayment);
     const minPrice = parseFloat(resultsList.dataset.minPrice) || 0;
-    const pricePerWeight = normalizeVND(resultsList.dataset.pricePerWeight) || 0;
+    const pricePerWeight = Number(resultsList.dataset.pricePerWeight) || 0;
     const customerCode = resultsList.dataset.customerCode;
 
     const today = new Date();
@@ -257,9 +231,9 @@ function exportInvoice() {
                 <td colspan="8" style="padding: 5px; border: none;"></td>
             </tr>
             <tr>
-                <td colspan="2" style="padding: 3px; border: 1px solid #bbb;"><strong>Người Nhận:</strong> ${customerCode}</td>
-                <td colspan="3" style="padding: 3px; border: 1px solid #bbb;"><strong>SĐT:</strong> ${phone}</td>
-                <td colspan="3" style="padding: 3px; border: 1px solid #bbb;"><strong>Địa Chỉ:</strong> ${address}</td>
+                <td colspan="2" style="padding: 3px; border: 1px solid #bbb;"><strong>Người Nhận:</strong> ${AppUtils.escapeHTML(customerCode)}</td>
+                <td colspan="3" style="padding: 3px; border: 1px solid #bbb;"><strong>SĐT:</strong> ${AppUtils.escapeHTML(phone)}</td>
+                <td colspan="3" style="padding: 3px; border: 1px solid #bbb;"><strong>Địa Chỉ:</strong> ${AppUtils.escapeHTML(address)}</td>
             </tr>
             <tr>
                 <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">STT</td>
@@ -274,7 +248,7 @@ function exportInvoice() {
 
     let stt = 1;
     let totalWeight = 0;
-    
+
     invoiceResults.found.forEach(item => {
         const actualWeight = roundUpToOneDecimal(parseFloat(item.totalWeight.replace(',', '.')));
         totalWeight += actualWeight;
@@ -283,13 +257,13 @@ function exportInvoice() {
 
         html += `<tr>
             <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">${stt}</td>
-            <td style="padding: 5px; border: 1px solid #bbb; text-align: left;">&#39;${item.code}</td>
+            <td style="padding: 5px; border: 1px solid #bbb; text-align: left;">&#39;${AppUtils.escapeHTML(item.code)}</td>
             <td style="padding: 5px; border: 1px solid #bbb;">Hàng TMDT</td>
             <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">1</td>
             <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">${actualWeight.toFixed(1)}</td>
             <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">${formatExcelNumber(pricePerWeight)}</td>
             <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">${formatExcelNumber(finalPrice)}</td>
-            <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">${formatDate(item.date)}</td>
+            <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">${AppUtils.escapeHTML(formatDate(item.date))}</td>
         </tr>`;
         stt++;
     });
@@ -328,11 +302,22 @@ function exportInvoice() {
         <body>${html}</body>
         </html>`;
 
-    downloadFile(excelFile, `phieu_xuat_kho_${customerCode}_${day}-${month}-${year}.xls`, 'application/vnd.ms-excel');
+    downloadFile(excelFile, `phieu_xuat_kho_${customerCode.replace(/[^A-Za-z0-9_-]/g, '_')}_${day}-${month}-${year}.xls`, 'application/vnd.ms-excel');
 }
 
 // Clear invoice results
+function clearInvoiceSearch() {
+    invoiceRequest++;
+    if (invoiceController) invoiceController.abort();
+    invoiceResults = [];
+    document.getElementById('invoiceResults').style.display = 'none';
+    document.getElementById('invoiceLoadStatus').innerText = '';
+    const result = document.getElementById('invoiceResultsList');
+    result.innerHTML = '';
+    ['totalPayment', 'minPrice', 'pricePerWeight', 'customerCode'].forEach(key => delete result.dataset[key]);
+}
 function clearInvoiceResults() {
+    clearInvoiceSearch();
     document.getElementById('invoiceCodesInput').value = '';
     document.getElementById('invoicePhone').value = '';
     document.getElementById('invoiceAddress').value = '';
@@ -351,66 +336,33 @@ function addInvoiceRow() {
     alert('Nhập mã vận đơn vào phần dưới và ấn "Tìm Kiếm" để thêm vào phiếu');
 }
 
-function searchCodes() {
-    const codesInput = document.getElementById('codesInput').value.trim();
-    if (!codesInput) {
-        alert('Vui lòng nhập ít nhất một mã vận đơn!');
-        return;
+async function searchCodes() {
+    const codes = inputCodes('codesInput');
+    if (!codes.length) { alert('Vui lòng nhập ít nhất một mã vận đơn!'); return; }
+    if (codes.length > 1000) { alert('Mỗi lần chỉ tra cứu tối đa 1000 mã'); return; }
+    const requestId = ++shipmentRequest;
+    if (shipmentController) shipmentController.abort();
+    shipmentController = new AbortController();
+    searchResults = [];
+    document.getElementById('results').style.display = 'none';
+    const status = document.getElementById('loadStatus');
+    status.innerText = '⏳ Đang tìm kiếm ' + codes.length + ' mã...';
+    try {
+        const result = await requestCodes(codes, shipmentController.signal);
+        if (requestId !== shipmentRequest) return;
+        searchResults = result;
+        displayResults();
+        status.innerText = '✅ Tìm thấy ' + result.found.length + '/' + codes.length + ' mã';
+    } catch (error) {
+        if (requestId !== shipmentRequest || error.name === 'AbortError') return;
+        status.innerText = '❌ ' + error.message;
     }
-
-    // Split by lines, trim, filter empty, normalize codes (extract from parentheses and remove after dash), then remove duplicates
-    const normalizeInputCode = (code) => {
-        let normalized = code.trim();
-
-        // If code contains parentheses, take value inside them
-        const parenMatch = normalized.match(/\(([^)]+)\)/);
-        if (parenMatch) {
-            normalized = parenMatch[1].trim();
-        }
-
-        // Remove everything after first dash if present
-        if (normalized.includes('-')) {
-            normalized = normalized.split('-')[0].trim();
-        }
-
-        return normalized;
-    };
-
-    const codes = [...new Set(
-        codesInput.split('\n')
-            .map(code => normalizeInputCode(code))
-            .filter(code => code)
-    )];
-    
-    document.getElementById('loadStatus').innerText = `⏳ Đang tìm kiếm ${codes.length} mã...`;
-
-    fetch('/api/search-codes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheetId, codes })
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            searchResults = result;
-            console.log('Search results:', searchResults);
-            displayResults();
-            document.getElementById('loadStatus').innerText = `✅ Tìm thấy ${result.found.length}/${codes.length} mã`;
-        } else {
-            alert('Lỗi: ' + result.error);
-            document.getElementById('loadStatus').innerText = `❌ Lỗi: ${result.error}`;
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        document.getElementById('loadStatus').innerText = `❌ Lỗi: ${error.message}`;
-    });
 }
 
 function displayResults() {
     const resultsList = document.getElementById('resultsList');
     const resultsDiv = document.getElementById('results');
-    
+
     let html = '';
 
     const parseWeight = (value) => {
@@ -430,16 +382,16 @@ function displayResults() {
                     <th>Ngày</th>
                     <th>Số Lần</th>
                 </tr>`;
-        
+
         let totalWeight = 0;
         searchResults.found.forEach(item => {
             const parsedWeight = parseFloat(item.totalWeight.replace(',', '.'));
             totalWeight += parsedWeight;
             const codesDisplay = item.originalCodes.join(', ');
             html += `<tr>
-                <td title="${codesDisplay}">${item.code}</td>
+                <td title="${AppUtils.escapeHTML(codesDisplay)}">${AppUtils.escapeHTML(item.code)}</td>
                 <td>${item.totalWeight}</td>
-                <td>${formatDate(item.date)}</td>
+                <td>${AppUtils.escapeHTML(formatDate(item.date))}</td>
                 <td>${item.count}</td>
             </tr>`;
         });
@@ -461,9 +413,9 @@ function displayResults() {
             <h3>❌ Không Tìm Được (${searchResults.notFound.length})</h3>
             <table>
                 <tr><th>Mã Vận Đơn</th></tr>`;
-        
+
         searchResults.notFound.forEach(code => {
-            html += `<tr><td class="status-not-found">${code}</td></tr>`;
+            html += `<tr><td class="status-not-found">${AppUtils.escapeHTML(code)}</td></tr>`;
         });
         html += '</table></div>';
     }
@@ -473,43 +425,20 @@ function displayResults() {
 }
 
 function exportCSV() {
-    if (!searchResults.found || (searchResults.found.length === 0 && searchResults.notFound.length === 0)) {
-        alert('Không có kết quả để export!');
-        return;
+    if (!searchResults.found || (!searchResults.found.length && !searchResults.notFound.length)) {
+        alert('Không có kết quả để export!'); return;
     }
-
-    const parseWeight = (value) => {
-        if (!value) return 0;
-        const num = parseFloat(value.toString().replace(',', '.'));
-        return isNaN(num) ? 0 : num;
-    };
-
-    let csv = 'Trạng Thái,Mã Vận Đơn,Tổng Cân Nặng (kg),Ngày,Số Lần\n';
+    const rows = [['Trạng Thái', 'Mã Vận Đơn', 'Tổng Cân Nặng (kg)', 'Ngày', 'Số Lần']];
     let totalWeight = 0;
-
-    // Export mã tìm được
-    if (searchResults.found && searchResults.found.length > 0) {
-        searchResults.found.forEach(item => {
-            const parsedWeight = parseFloat(item.totalWeight.replace(',', '.'));
-            totalWeight += parsedWeight;
-            const codesDisplay = item.originalCodes.join('; ');
-            csv += `Tìm Được,"${codesDisplay}","${item.totalWeight}","${formatDate(item.date)}","${item.count}"\n`;
-        });
-    }
-
-    // Export mã không tìm được
-    if (searchResults.notFound && searchResults.notFound.length > 0) {
-        searchResults.notFound.forEach(code => {
-            csv += `Không Tìm Được,"${code}",,,\n`;
-        });
-    }
-
-    // Thêm hàng tổng
-    if (searchResults.found && searchResults.found.length > 0) {
-        csv += `TỔNG CỘNG,,${totalWeight.toFixed(2).replace('.', ',')},${searchResults.found.length} mã,${searchResults.found.reduce((sum, item) => sum + item.count, 0)} lần\n`;
-    }
-
-    downloadFile(csv, 'van_don_search.csv', 'text/csv');
+    searchResults.found.forEach(item => {
+        totalWeight += parseFloat(item.totalWeight.replace(',', '.')) || 0;
+        rows.push(['Tìm Được', item.originalCodes.join('; '), item.totalWeight, formatDate(item.date), item.count]);
+    });
+    searchResults.notFound.forEach(code => rows.push(['Không Tìm Được', code, '', '', '']));
+    if (searchResults.found.length) rows.push(['TỔNG CỘNG', '', totalWeight.toFixed(2).replace('.', ','),
+        searchResults.found.length + ' mã', searchResults.found.reduce((sum, item) => sum + item.count, 0) + ' lần']);
+    const csv = '\uFEFF' + rows.map(row => row.map(AppUtils.csvCell).join(',')).join('\r\n');
+    downloadFile(csv, 'van_don_search.csv', 'text/csv;charset=utf-8');
 }
 
 function exportResults() {
@@ -545,9 +474,9 @@ function exportResults() {
             const codesDisplay = item.originalCodes.join('; ');
             html += `<tr>
                 <td>Tìm Được</td>
-                <td>${codesDisplay}</td>
+                <td>${AppUtils.escapeHTML(codesDisplay)}</td>
                 <td>${item.totalWeight}</td>
-                <td>${formatDate(item.date)}</td>
+                <td>${AppUtils.escapeHTML(formatDate(item.date))}</td>
                 <td>${item.count}</td>
             </tr>`;
         });
@@ -558,7 +487,7 @@ function exportResults() {
         searchResults.notFound.forEach(code => {
             html += `<tr>
                 <td>Không Tìm Được</td>
-                <td>${code}</td>
+                <td>${AppUtils.escapeHTML(code)}</td>
                 <td></td>
                 <td></td>
                 <td></td>
@@ -605,6 +534,7 @@ function downloadFile(content, filename, mimeType) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setTimeout(() => window.URL.revokeObjectURL(url), 1000);
 }
 
 // ==================== CUSTOMER MANAGEMENT ====================
@@ -615,7 +545,6 @@ function loadCustomers() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                console.log('Loaded customers:', data.customers);
                 displayCustomers(data.customers);
             }
         })
@@ -625,7 +554,7 @@ function loadCustomers() {
 // Display customers in table
 function displayCustomers(customers) {
     const customersList = document.getElementById('customersList');
-    
+
     if (!customers || customers.length === 0) {
         customersList.innerHTML = '<p style="color: #999;">Chưa có khách hàng nào</p>';
         return;
@@ -635,29 +564,36 @@ function displayCustomers(customers) {
         <table>
             <tr>
                 <th>Mã Khách Hàng</th>
-                <th>Mức Tối Thiểu (kg)</th>
+                <th>Tiền Tối Thiểu (VNĐ)</th>
                 <th>Giá Tiền/kg (VND)</th>
                 <th>Ngày Tạo</th>
                 <th>Hành Động</th>
             </tr>`;
 
     customers.forEach(customer => {
-        const createdDate = new Date(customer.createdAt).toLocaleDateString('vi-VN');
+        const createdDate = new Date(customer.createdAt.includes('T') ? customer.createdAt : customer.createdAt.replace(' ', 'T') + 'Z').toLocaleDateString('vi-VN');
         const normalizedPrice = normalizeVND(customer.pricePerWeight);
         html += `<tr>
-            <td><strong>${customer.code}</strong></td>
+            <td><strong>${AppUtils.escapeHTML(customer.code)}</strong></td>
             <td>${customer.minLevel.toFixed(2)}</td>
             <td>${formatMoney(normalizedPrice)}</td>
             <td>${createdDate}</td>
             <td>
-                <button onclick="editCustomer(${customer.id}, '${customer.code}', ${customer.minLevel}, ${customer.pricePerWeight})" style="background-color: #28a745; padding: 5px 10px; color: white; border: none; border-radius: 4px; cursor: pointer;">✏️ Sửa</button>
-                <button onclick="deleteCustomer(${customer.id})" style="background-color: #dc3545; padding: 5px 10px; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 5px;">🗑️ Xóa</button>
+                <button data-edit-customer="${customer.id}" style="background-color: #28a745; padding: 5px 10px; color: white; border: none; border-radius: 4px; cursor: pointer;">✏️ Sửa</button>
+                <button data-delete-customer="${customer.id}" style="background-color: #dc3545; padding: 5px 10px; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 5px;">🗑️ Xóa</button>
             </td>
         </tr>`;
     });
 
     html += '</table>';
     customersList.innerHTML = html;
+    customersList.querySelectorAll('[data-edit-customer]').forEach(button => {
+        const customer = customers.find(item => String(item.id) === button.dataset.editCustomer);
+        button.addEventListener('click', () => editCustomer(customer.id, customer.code, customer.minLevel, customer.pricePerWeight));
+    });
+    customersList.querySelectorAll('[data-delete-customer]').forEach(button => {
+        button.addEventListener('click', () => deleteCustomer(Number(button.dataset.deleteCustomer)));
+    });
 }
 
 // Add new customer
@@ -666,25 +602,22 @@ function addCustomer() {
     const minLevel = document.getElementById('minLevel').value.trim();
     const pricePerWeight = document.getElementById('pricePerWeight').value.trim();
 
-    if (!code || !minLevel || !pricePerWeight) {
+    if (!code || !minLevel || !pricePerWeight || !Number.isFinite(Number(minLevel)) || Number(minLevel) < 0 || !Number.isFinite(Number(pricePerWeight)) || Number(pricePerWeight) <= 0) {
         alert('Vui lòng điền đầy đủ thông tin');
         return;
     }
-
-    console.log('Adding customer:', { code, minLevel, pricePerWeight });
 
     fetch('/api/customers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             code,
-            minLevel: parseFloat(minLevel),
-            pricePerWeight: parseFloat(pricePerWeight)
+            minLevel: Number(minLevel),
+            pricePerWeight: Number(pricePerWeight)
         })
     })
     .then(response => response.json())
     .then(data => {
-        console.log('Add customer response:', data);
         if (data.success) {
             alert(data.message);
             // Clear inputs
@@ -708,12 +641,12 @@ function editCustomer(id, code, minLevel, pricePerWeight) {
     document.getElementById('customerCode').value = code;
     document.getElementById('minLevel').value = minLevel;
     document.getElementById('pricePerWeight').value = pricePerWeight;
-    
+
     // Store the ID for update
     document.getElementById('customerCode').dataset.editId = id;
-    
+
     // Change button text to update
-    const addBtn = document.querySelector('button[onclick="addCustomer()"]');
+    const addBtn = document.getElementById('customerSaveButton');
     addBtn.textContent = '✏️ Cập Nhật';
     addBtn.onclick = () => updateCustomer(id);
 }
@@ -724,7 +657,7 @@ function updateCustomer(id) {
     const minLevel = document.getElementById('minLevel').value.trim();
     const pricePerWeight = document.getElementById('pricePerWeight').value.trim();
 
-    if (!code || !minLevel || !pricePerWeight) {
+    if (!code || !minLevel || !pricePerWeight || !Number.isFinite(Number(minLevel)) || Number(minLevel) < 0 || !Number.isFinite(Number(pricePerWeight)) || Number(pricePerWeight) <= 0) {
         alert('Vui lòng điền đầy đủ thông tin');
         return;
     }
@@ -734,8 +667,8 @@ function updateCustomer(id) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             code,
-            minLevel: parseFloat(minLevel),
-            pricePerWeight: parseFloat(pricePerWeight)
+            minLevel: Number(minLevel),
+            pricePerWeight: Number(pricePerWeight)
         })
     })
     .then(response => response.json())
@@ -746,14 +679,15 @@ function updateCustomer(id) {
             document.getElementById('customerCode').value = '';
             document.getElementById('minLevel').value = '';
             document.getElementById('pricePerWeight').value = '';
-            
+
             // Reset button
-            const addBtn = document.querySelector('button[onclick="updateCustomer(' + id + ')"]');
+            const addBtn = document.getElementById('customerSaveButton');
             if (addBtn) {
                 addBtn.textContent = '➕ Thêm';
                 addBtn.onclick = () => addCustomer();
+                delete document.getElementById('customerCode').dataset.editId;
             }
-            
+
             // Reload customers
             loadCustomers();
         } else {
@@ -791,6 +725,14 @@ function deleteCustomer(id) {
 
 // Load customers when page loads
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Page loaded, loading customers from database');
+    document.getElementById('invoiceCustomer').addEventListener('change', clearInvoiceSearch);
+    document.getElementById('invoiceCodesInput').addEventListener('input', clearInvoiceSearch);
+    document.getElementById('codesInput').addEventListener('input', () => {
+        shipmentRequest++;
+        if (shipmentController) shipmentController.abort();
+        searchResults = [];
+        document.getElementById('results').style.display = 'none';
+        document.getElementById('loadStatus').innerText = '';
+    });
     loadCustomers();
 });
