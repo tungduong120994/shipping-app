@@ -15,7 +15,7 @@ async function startServer(t, auth = false) {
   const child = spawn(process.execPath, ['server.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: { ...process.env, PORT: String(port), DATABASE_PATH: path.join(directory, 'test.db'),
-      APP_USERNAME: auth ? 'test-user' : '', APP_PASSWORD: auth ? 'test-password' : '' },
+      APP_USERNAME: auth ? 'test-user' : '', APP_PASSWORD: auth ? 'test-password' : '', SHEET_CACHE_WARMUP: '0' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let logs = '';
@@ -46,6 +46,9 @@ test('real SQLite customer CRUD, validation, malformed JSON and static assets', 
     method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
   assert.equal((await fetch(base + '/app-utils.js')).status, 200);
+  const cache = await (await fetch(base + '/api/cache/status/validsheetid')).json();
+  assert.equal(cache.cache.ready, false);
+  assert.equal((await send('/api/cache/refresh', 'POST', { sheetId: 'bad' })).status, 400);
   assert.equal((await send('/api/search-codes', 'POST', { sheetId: 'validsheetid', codes: 'ABC' })).status, 400);
   assert.equal((await send('/api/customers', 'POST', { code: '   ', minLevel: 0, pricePerWeight: 50 })).status, 400);
   assert.equal((await send('/api/customers', 'POST', { code: 'A', minLevel: -1, pricePerWeight: 50 })).status, 400);

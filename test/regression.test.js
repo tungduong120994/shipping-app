@@ -114,6 +114,7 @@ function frontend() {
     return nodes.get(id);
   };
   const context = { AppUtils: utils, AbortController, console, alert() {},
+    setTimeout() {}, clearTimeout() {},
     document: { getElementById: node, addEventListener() {} } };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(require.resolve('../public/script.js'), 'utf8'), context);
@@ -154,4 +155,19 @@ test('CSV total remains five columns with comma decimal values', () => {
   const rows = parseCSV(downloaded);
   assert.ok(rows.every(row => row.length === 5));
   assert.equal(rows.at(-1)[2], '5,25');
+});
+test('manual refresh displays loaded tab count and invalidates prior search and invoice exports', async () => {
+  const { context, node } = frontend();
+  node('results').style.display = 'block'; node('invoiceResults').style.display = 'block';
+  node('invoiceResultsList').dataset.totalPayment = 50000;
+  context.fetch = async () => ({ ok: true, json: async () => ({ success: true, cache: {
+    ready: true, refreshing: false, updatedAt: '2026-10-08T15:00:00Z', sheetCount: 10,
+    stale: false, expired: false, error: null
+  } }) });
+  await context.refreshSheetCache();
+  assert.ok(node('sheetCacheStatus').textContent.includes('10 tab'));
+  assert.equal(node('results').style.display, 'none');
+  assert.equal(node('invoiceResults').style.display, 'none');
+  assert.equal(node('invoiceResultsList').dataset.totalPayment, undefined);
+  assert.equal(node('refreshSheetCacheButton').disabled, false);
 });

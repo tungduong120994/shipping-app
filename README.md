@@ -32,7 +32,10 @@
 ## Kiểm tra và vận hành
 
 - Cài bằng `npm ci`, chạy kiểm tra bằng `npm test`, khởi động bằng `npm start`. Node.js 20 trở lên.
-- Tra cứu cache tối đa 60 giây, tải tối đa 4 yêu cầu cùng lúc, timeout mỗi yêu cầu 15 giây.
+- Nạp toàn bộ tab và lập chỉ mục mã vận đơn khi server khởi động. Tra cứu từ chỉ mục trong RAM, không tải lại CSV cho từng mã.
+- Tự cập nhật nền mỗi 5 phút, tải tối đa 4 yêu cầu cùng lúc, timeout mỗi yêu cầu 15 giây. Nút **Cập nhật dữ liệu** tải lại ngay.
+- Hiển thị số tab và thời điểm dữ liệu cập nhật. Khi cập nhật nền lỗi, bản cache trước vẫn dùng tối đa 15 phút với thông báo; quá hạn thì chặn tra cứu tới khi tải thành công.
+- Cache RAM mất khi server restart; lượt đầu cần chờ nạp dữ liệu. `SHEET_CACHE_WARMUP=0` chỉ dùng để tắt nạp trước khi kiểm thử; `SHEET_ID` chọn file nạp trước (mặc định file đang dùng).
 - Sheet tải lỗi sẽ chặn kết quả toàn bộ lượt tra cứu, tránh lập phiếu từ dữ liệu chưa đầy đủ.
 - `/health` trả trạng thái database và commit đang chạy (`RENDER_GIT_COMMIT`).
 - `DATABASE_PATH`: đường dẫn SQLite. Mặc định vẫn dùng `customers.db` cũ.

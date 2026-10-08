@@ -38,6 +38,10 @@
 <body>
     <div class="container">
         <h1>📦 Hệ Thống Quản Lý Vận Đơn & Khách Hàng</h1>
+        <div class="section" style="margin-top: 0;">
+            <span id="sheetCacheStatus" role="status">Đang kiểm tra dữ liệu Google Sheets...</span>
+            <button id="refreshSheetCacheButton" onclick="refreshSheetCache()">🔄 Cập nhật dữ liệu</button>
+        </div>
 
         <div class="tab-navigation">
             <button class="tab-button active" onclick="switchTab('shipments', event)">🚚 Quản Lý Vận Đơn</button>

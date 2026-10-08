@@ -29,9 +29,8 @@ function parseCSV(csv) {
   if (cell !== '' || row.length) pushRow();
   return rows;
 }
-function searchSheetRows(sheets, inputCodes) {
-  const codes = [...new Set(inputCodes.map(normalizeCode).filter(Boolean))];
-  const wanted = new Set(codes), matches = new Map();
+function buildSheetIndex(sheets) {
+  const matches = new Map();
   const isWeight = value => /^[0-9]+(?:[.,][0-9]+)?$/.test(value);
   for (const { gid, rows } of sheets) {
     const header = rows[0] || [];
@@ -40,7 +39,7 @@ function searchSheetRows(sheets, inputCodes) {
       for (let col = 0; col < cells.length; col++) {
         if (!cells[col]) continue;
         const code = normalizeCode(cells[col]);
-        if (!wanted.has(code) || seen.has(code)) continue;
+        if (!code || seen.has(code)) continue;
         // Legacy rule: one normalized code per row.
         seen.add(code);
         const next = cells[col + 1] || '', prev = cells[col - 1] || '';
@@ -50,23 +49,37 @@ function searchSheetRows(sheets, inputCodes) {
           date: dateMatch ? dateMatch[1] : 'N/A', maBao: prev, gid: String(gid) };
         if (!matches.has(code)) matches.set(code, new Map());
         const byGid = matches.get(code);
-        if (!byGid.has(result.gid)) byGid.set(result.gid, []);
-        byGid.get(result.gid).push(result);
+        if (!byGid.has(result.gid)) byGid.set(result.gid, {
+          first: result, count: 0, totalWeight: 0, originalCodes: new Set()
+        });
+        const group = byGid.get(result.gid);
+        group.count++;
+        group.totalWeight += parseFloat(weight.replace(',', '.')) || 0;
+        group.originalCodes.add(result.originalCode);
       }
     }
   }
+  return matches;
+}
+function searchIndexedSheets(matches, inputCodes) {
+  const codes = [...new Set(inputCodes.map(normalizeCode).filter(Boolean))];
   const found = [], notFound = [];
   for (const code of codes) {
     const byGid = matches.get(code);
     if (!byGid) { notFound.push(code); continue; }
     // Legacy rule: all rows in one sheet, first occurrence per sheet otherwise.
-    const results = byGid.size === 1 ? [...byGid.values()][0]
-      : [...byGid.values()].map(entries => entries[0]);
-    found.push({ code, originalCodes: [...new Set(results.map(item => item.originalCode))],
-      weight: results[0].weight, date: results[0].date, maBao: results[0].maBao,
-      count: results.length, totalWeight: results.reduce((sum, item) =>
-        sum + (parseFloat(item.weight.replace(',', '.')) || 0), 0).toFixed(2).replace('.', ',') });
+    const groups = [...byGid.values()], first = groups[0].first;
+    const oneSheet = groups.length === 1;
+    found.push({ code, originalCodes: oneSheet ? [...groups[0].originalCodes]
+      : [...new Set(groups.map(group => group.first.originalCode))],
+      weight: first.weight, date: first.date, maBao: first.maBao,
+      count: oneSheet ? groups[0].count : groups.length,
+      totalWeight: (oneSheet ? groups[0].totalWeight : groups.reduce((sum, group) =>
+        sum + (parseFloat(group.first.weight.replace(',', '.')) || 0), 0)).toFixed(2).replace('.', ',') });
   }
   return { found, notFound };
 }
-module.exports = { normalizeCode, parseCSV, searchSheetRows };
+function searchSheetRows(sheets, inputCodes) {
+  return searchIndexedSheets(buildSheetIndex(sheets), inputCodes);
+}
+module.exports = { normalizeCode, parseCSV, searchSheetRows, buildSheetIndex, searchIndexedSheets };

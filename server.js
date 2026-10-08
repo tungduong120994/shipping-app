@@ -6,8 +6,11 @@ const sqlite3 = require('sqlite3').verbose();
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { searchSheetRows } = require('./sheet-utils');
 const { createSheetService } = require('./sheet-service');
+const { createSnapshotCache } = require('./snapshot-cache');
 const app = express();
 const sheets = createSheetService(fetch);
+const snapshots = createSnapshotCache(sheets);
+const defaultSheetId = process.env.SHEET_ID || '1hLDE0Hy87ekRhf-1KUhXdrHHdH5LT176BG-0K4yHbaE';
 const port = process.env.PORT || 3000;
 const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'customers.db');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -39,6 +42,18 @@ const validGid = gid => typeof gid === 'string' && /^\d{1,20}$/.test(gid);
 const invalid = (res, error) => res.status(400).json({ success: false, error });
 const remoteError = (res, error) => res.status(502).json({ success: false,
   error: `Không thể hoàn tất tra cứu: ${error.message}. Kết quả chưa được dùng để lập phiếu.` });
+app.get('/api/cache/status/:sheetId', (req, res) => {
+  if (!validSheetId(req.params.sheetId)) return invalid(res, 'ID Google Sheets không hợp lệ');
+  res.json({ success: true, cache: snapshots.status(req.params.sheetId) });
+});
+app.post('/api/cache/refresh', async (req, res) => {
+  const { sheetId } = req.body || {};
+  if (!validSheetId(sheetId)) return invalid(res, 'ID Google Sheets không hợp lệ');
+  try {
+    await snapshots.refresh(sheetId);
+    res.json({ success: true, cache: snapshots.status(sheetId) });
+  } catch (error) { remoteError(res, error); }
+});
 app.get('/api/sheet-ids/:sheetId', async (req, res) => {
   if (!validSheetId(req.params.sheetId)) return invalid(res, 'ID Google Sheets không hợp lệ');
   try {
@@ -64,8 +79,9 @@ app.post('/api/search-codes', async (req, res) => {
   }
   try {
     const selected = gids && gids.length ? [...new Set(gids)] : undefined;
-    const data = await sheets.loadSheets(sheetId, selected);
-    res.json({ success: true, ...searchSheetRows(data, codes) });
+    const result = selected ? searchSheetRows(await sheets.loadSheets(sheetId, selected), codes)
+      : await snapshots.search(sheetId, codes);
+    res.json({ success: true, ...result });
   } catch (error) { remoteError(res, error); }
 });
 function customerInput(body) {
@@ -133,15 +149,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Lỗi xử lý yêu cầu' });
 });
 let server;
+let stopCacheWarmup;
 db.run(`CREATE TABLE IF NOT EXISTS customers (
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL,
   minLevel REAL NOT NULL, pricePerWeight REAL NOT NULL,
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
 )`, err => {
   if (err) { console.error('Cannot initialize database:', err.message); process.exitCode = 1; db.close(); return; }
-  server = app.listen(port, () => console.log(`Shipping app listening on port ${port}`));
+  server = app.listen(port, () => {
+    console.log(`Shipping app listening on port ${port}`);
+    if (process.env.SHEET_CACHE_WARMUP !== '0') stopCacheWarmup = snapshots.start(defaultSheetId);
+  });
 });
 function shutdown() {
+  if (stopCacheWarmup) stopCacheWarmup();
   if (!server) return db.close();
   server.close(() => db.close());
   setTimeout(() => process.exit(1), 10000).unref();

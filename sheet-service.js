@@ -1,5 +1,22 @@
 const { parseCSV } = require('./sheet-utils');
 const KNOWN_GIDS = ['0', '1721394584', '793353259', '1853935368', '1868655219', '699711958'];
+function extractSheetMetadata(html) {
+  const tabs = new Map();
+  // Google embeds tab metadata as a JSON-encoded JSON array in topsnapshot.
+  // Parse JSON only; never execute scripts from the Google page.
+  for (const match of html.matchAll(/\[21350203,"((?:\\.|[^"\\])*)"\]/g)) {
+    try {
+      const data = JSON.parse(JSON.parse('"' + match[1] + '"'));
+      const gid = data[2], name = data[3]?.[0]?.['1']?.[0]?.[2];
+      if (typeof gid === 'string' && /^\d+$/.test(gid) && typeof name === 'string') tabs.set(gid, name.trim());
+    } catch { /* Other snapshots must not be treated as tabs. */ }
+  }
+  for (const pattern of [/"sheetId":\s*"?(\d+)"?/g, /gid[=?](\d+)/g,
+    /"gid":\s*(\d+)/g, /id="(\d+)-grid-container"/g]) {
+    for (const match of html.matchAll(pattern)) if (!tabs.has(match[1])) tabs.set(match[1], `Sheet ${match[1]}`);
+  }
+  return tabs;
+}
 function createSheetService(fetchImpl, { timeoutMs = 15000, ttlMs = 60000 } = {}) {
   const cache = new Map();
   let active = 0;
@@ -71,10 +88,8 @@ function createSheetService(fetchImpl, { timeoutMs = 15000, ttlMs = 60000 } = {}
   function discover(sheetId) {
     return cached(`gids:${sheetId}`, async () => {
       const html = await read(`https://docs.google.com/spreadsheets/d/${sheetId}/edit`);
-      const candidates = new Set();
-      for (const pattern of [/"sheetId":\s*"?(\d+)"?/g, /gid[=?](\d+)/g, /"gid":\s*(\d+)/g]) {
-        for (const match of html.matchAll(pattern)) candidates.add(match[1]);
-      }
+      const tabs = extractSheetMetadata(html);
+      const candidates = new Set(tabs.keys());
       KNOWN_GIDS.forEach(gid => candidates.add(gid));
       if (candidates.size > 100) throw new Error('Quá nhiều sheet. Vui lòng chỉ định danh sách GID');
       const valid = [];
@@ -83,6 +98,10 @@ function createSheetService(fetchImpl, { timeoutMs = 15000, ttlMs = 60000 } = {}
         catch (error) { if (![400, 404].includes(error.remoteStatus)) throw error; }
       }));
       if (!valid.length) throw new Error('Không đọc được sheet nào. Kiểm tra quyền chia sẻ Google Sheets');
+      const visibleTabCount = [...html.matchAll(/class="[^"]*docs-sheet-tab-caption[^"]*"/g)].length;
+      if (visibleTabCount && valid.length < visibleTabCount) {
+        throw new Error(`Chỉ đọc được ${valid.length}/${visibleTabCount} tab. Không thể xác nhận đầy đủ dữ liệu`);
+      }
       return valid.sort((a, b) => Number(a) - Number(b));
     });
   }
@@ -90,6 +109,9 @@ function createSheetService(fetchImpl, { timeoutMs = 15000, ttlMs = 60000 } = {}
     const selected = gids || await discover(sheetId);
     return Promise.all(selected.map(gid => loadSheet(sheetId, gid)));
   }
-  return { loadSheet, discover, loadSheets };
+  function invalidate(sheetId) {
+    for (const key of cache.keys()) if (key === `gids:${sheetId}` || key.startsWith(`csv:${sheetId}:`)) cache.delete(key);
+  }
+  return { loadSheet, discover, loadSheets, invalidate };
 }
-module.exports = { createSheetService };
+module.exports = { createSheetService, extractSheetMetadata };

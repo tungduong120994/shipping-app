@@ -12,11 +12,55 @@ async function requestCodes(codes, signal) {
     });
     const result = await response.json();
     if (!response.ok || !result.success) throw new Error(result.error || 'Không thể đọc dữ liệu Google Sheets');
+    if (result.cache) displaySheetCacheStatus(result.cache);
     return result;
 }
 
 let sheetId = '1hLDE0Hy87ekRhf-1KUhXdrHHdH5LT176BG-0K4yHbaE';
 // Note: gids are now automatically detected by server, no need to specify them here
+let cacheStatusTimer;
+function displaySheetCacheStatus(cache) {
+    const label = document.getElementById('sheetCacheStatus');
+    if (!label) return;
+    const when = cache.updatedAt ? new Date(cache.updatedAt).toLocaleString('vi-VN', { timeZone: 'Asia/Bangkok' }) : '';
+    label.textContent = cache.ready
+        ? `${cache.sheetCount} tab đã nạp · Cập nhật: ${when}${cache.refreshing ? ' · Đang cập nhật nền...' : ''}${cache.expired ? ' · Dữ liệu hết hạn, cần cập nhật' : cache.stale ? ' · Đang dùng bản cache trước' : ''}`
+        : cache.refreshing ? 'Đang nạp dữ liệu lần đầu...' : 'Chưa nạp được dữ liệu. Bấm Cập nhật dữ liệu để thử lại.';
+    if (cache.error) label.textContent += ' · Lần cập nhật gần nhất lỗi: ' + cache.error;
+    document.getElementById('refreshSheetCacheButton').disabled = cache.refreshing;
+    clearTimeout(cacheStatusTimer);
+    cacheStatusTimer = setTimeout(loadSheetCacheStatus, cache.refreshing ? 2000 : 60000);
+}
+async function loadSheetCacheStatus() {
+    try {
+        const response = await fetch('/api/cache/status/' + sheetId);
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Không đọc được trạng thái cache');
+        displaySheetCacheStatus(data.cache);
+    } catch (error) {
+        document.getElementById('sheetCacheStatus').textContent = error.message;
+    }
+}
+async function refreshSheetCache() {
+    const button = document.getElementById('refreshSheetCacheButton');
+    button.disabled = true;
+    document.getElementById('sheetCacheStatus').textContent = 'Đang cập nhật toàn bộ dữ liệu...';
+    try {
+        const response = await fetch('/api/cache/refresh', { method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sheetId }) });
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Không cập nhật được dữ liệu');
+        displaySheetCacheStatus(data.cache);
+        shipmentRequest++;
+        if (shipmentController) shipmentController.abort();
+        searchResults = [];
+        document.getElementById('results').style.display = 'none';
+        clearInvoiceSearch();
+        document.getElementById('loadStatus').innerText = 'Dữ liệu đã cập nhật. Vui lòng tìm kiếm lại.';
+    } catch (error) {
+        document.getElementById('sheetCacheStatus').textContent = error.message;
+    } finally { button.disabled = false; }
+}
 
 // ==================== FORMATTING HELPERS ====================
 // Format date to show only day/month (e.g., "15/5")
@@ -725,6 +769,7 @@ function deleteCustomer(id) {
 
 // Load customers when page loads
 document.addEventListener('DOMContentLoaded', () => {
+    loadSheetCacheStatus();
     document.getElementById('invoiceCustomer').addEventListener('change', clearInvoiceSearch);
     document.getElementById('invoiceCodesInput').addEventListener('input', clearInvoiceSearch);
     document.getElementById('codesInput').addEventListener('input', () => {
