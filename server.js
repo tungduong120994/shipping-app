@@ -46,12 +46,12 @@ app.get('/api/cache/status/:sheetId', (req, res) => {
   if (!validSheetId(req.params.sheetId)) return invalid(res, 'ID Google Sheets không hợp lệ');
   res.json({ success: true, cache: snapshots.status(req.params.sheetId) });
 });
-app.post('/api/cache/refresh', async (req, res) => {
+app.post('/api/cache/refresh', (req, res) => {
   const { sheetId } = req.body || {};
   if (!validSheetId(sheetId)) return invalid(res, 'ID Google Sheets không hợp lệ');
   try {
-    await snapshots.refresh(sheetId);
-    res.json({ success: true, cache: snapshots.status(sheetId) });
+    snapshots.refresh(sheetId).catch(error => console.warn('Manual cache refresh failed:', error.message));
+    res.status(202).json({ success: true, cache: snapshots.status(sheetId) });
   } catch (error) { remoteError(res, error); }
 });
 app.get('/api/sheet-ids/:sheetId', async (req, res) => {

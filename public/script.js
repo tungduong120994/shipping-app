@@ -43,6 +43,7 @@ async function loadSheetCacheStatus() {
 }
 async function refreshSheetCache() {
     const button = document.getElementById('refreshSheetCacheButton');
+    let submitted = false;
     button.disabled = true;
     document.getElementById('sheetCacheStatus').textContent = 'Đang cập nhật toàn bộ dữ liệu...';
     try {
@@ -50,16 +51,19 @@ async function refreshSheetCache() {
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sheetId }) });
         const data = await response.json();
         if (!response.ok || !data.success) throw new Error(data.error || 'Không cập nhật được dữ liệu');
+        submitted = true;
         displaySheetCacheStatus(data.cache);
         shipmentRequest++;
         if (shipmentController) shipmentController.abort();
         searchResults = [];
         document.getElementById('results').style.display = 'none';
         clearInvoiceSearch();
-        document.getElementById('loadStatus').innerText = 'Dữ liệu đã cập nhật. Vui lòng tìm kiếm lại.';
+        document.getElementById('loadStatus').innerText = data.cache.refreshing
+            ? 'Đang cập nhật dữ liệu. Thời điểm cập nhật sẽ hiển thị khi hoàn tất.'
+            : 'Dữ liệu đã cập nhật. Vui lòng tìm kiếm lại.';
     } catch (error) {
         document.getElementById('sheetCacheStatus').textContent = error.message;
-    } finally { button.disabled = false; }
+    } finally { if (!submitted) button.disabled = false; }
 }
 
 // ==================== FORMATTING HELPERS ====================

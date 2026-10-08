@@ -34,6 +34,7 @@ function buildSheetIndex(sheets) {
   const isWeight = value => /^[0-9]+(?:[.,][0-9]+)?$/.test(value);
   for (const { gid, rows } of sheets) {
     const header = rows[0] || [];
+    const dates = header.map(value => String(value).match(/(\d{1,2}\/\d{1,2})/)?.[1] || 'N/A');
     for (const cells of rows.slice(1)) {
       const seen = new Set();
       for (let col = 0; col < cells.length; col++) {
@@ -44,18 +45,31 @@ function buildSheetIndex(sheets) {
         seen.add(code);
         const next = cells[col + 1] || '', prev = cells[col - 1] || '';
         const weight = isWeight(next) ? next : isWeight(prev) ? prev : '';
-        const dateMatch = String(header[col - 1] || '').match(/(\d{1,2}\/\d{1,2})/);
-        const result = { originalCode: cells[col], code, weight,
-          date: dateMatch ? dateMatch[1] : 'N/A', maBao: prev, gid: String(gid) };
-        if (!matches.has(code)) matches.set(code, new Map());
-        const byGid = matches.get(code);
-        if (!byGid.has(result.gid)) byGid.set(result.gid, {
-          first: result, count: 0, totalWeight: 0, originalCodes: new Set()
-        });
-        const group = byGid.get(result.gid);
+        const result = { originalCode: cells[col], weight,
+          date: dates[col - 1] || 'N/A', maBao: prev, gid: String(gid) };
+        let entry = matches.get(code), group;
+        if (!entry) {
+          group = { first: result, count: 0, totalWeight: 0, originalCodes: null };
+          matches.set(code, group);
+        } else if (entry instanceof Map) {
+          group = entry.get(result.gid);
+          if (!group) {
+            group = { first: result, count: 0, totalWeight: 0, originalCodes: null };
+            entry.set(result.gid, group);
+          }
+        } else if (entry.first.gid === result.gid) group = entry;
+        else {
+          group = { first: result, count: 0, totalWeight: 0, originalCodes: null };
+          matches.set(code, new Map([[entry.first.gid, entry], [result.gid, group]]));
+        }
         group.count++;
         group.totalWeight += parseFloat(weight.replace(',', '.')) || 0;
-        group.originalCodes.add(result.originalCode);
+        // Most keys occur in one sheet with one original spelling. Allocate
+        // secondary Maps/Sets only when necessary so refresh fits small servers.
+        if (result.originalCode !== group.first.originalCode) {
+          if (!group.originalCodes) group.originalCodes = new Set([group.first.originalCode]);
+          group.originalCodes.add(result.originalCode);
+        }
       }
     }
   }
@@ -68,9 +82,10 @@ function searchIndexedSheets(matches, inputCodes) {
     const byGid = matches.get(code);
     if (!byGid) { notFound.push(code); continue; }
     // Legacy rule: all rows in one sheet, first occurrence per sheet otherwise.
-    const groups = [...byGid.values()], first = groups[0].first;
+    const groups = byGid instanceof Map ? [...byGid.values()] : [byGid], first = groups[0].first;
     const oneSheet = groups.length === 1;
-    found.push({ code, originalCodes: oneSheet ? [...groups[0].originalCodes]
+    found.push({ code, originalCodes: oneSheet ? (groups[0].originalCodes
+      ? [...groups[0].originalCodes] : [first.originalCode])
       : [...new Set(groups.map(group => group.first.originalCode))],
       weight: first.weight, date: first.date, maBao: first.maBao,
       count: oneSheet ? groups[0].count : groups.length,
