@@ -41,4 +41,7 @@
 - `DATABASE_PATH`: đường dẫn SQLite. Mặc định vẫn dùng `customers.db` cũ.
 - Trên Render, chỉ dùng đường dẫn persistent disk đã được cấu hình khi cần giữ dữ liệu qua deploy. Đổi biến môi trường không tự di chuyển database; sao lưu và chép database cũ trước khi đổi đường dẫn.
 - `APP_USERNAME` và `APP_PASSWORD`: cấu hình cả hai để bật đăng nhập Basic cho giao diện/API qua HTTPS. Để trống cả hai giữ cách truy cập cũ. Không ghi mật khẩu vào Git.
-- File `.xls` vẫn dùng định dạng HTML tương thích Excel theo cách xuất cũ.
+- Phiếu xuất kho có hai định dạng: Excel `.xlsx` thật và PDF A4, theo mẫu THN (logo, địa chỉ, bảng hàng, tổng tiền, chữ ký và lưu ý).
+- Sau khi tìm mã, bấm **Tạo phiếu Excel / PDF**, chọn khách hàng, nhập số điện thoại/địa chỉ rồi chọn định dạng xuất. Có thể tra cứu trực tiếp tại tab Phiếu Xuất Kho.
+- Xuất phiếu kiểm tra lại cân nặng/ngày trong cache và đơn giá trong database. Nếu dữ liệu đổi sau khi tra cứu, yêu cầu tìm lại để tránh xuất nhầm số tiền.
+- Mã vận đơn trong Excel là chuỗi để giữ số 0 đầu và mã dài. Công thức tiền giữ mức tối thiểu từng mã. PDF nhúng font Noto Serif có giấy phép OFL để giữ tiếng Việt; bảng dài tự sang trang.

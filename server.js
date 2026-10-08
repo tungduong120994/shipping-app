@@ -4,7 +4,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
-const { searchSheetRows } = require('./sheet-utils');
+const { searchSheetRows, normalizeCode } = require('./sheet-utils');
+const { normalizeVND } = require('./public/app-utils');
 const { createSheetService } = require('./sheet-service');
 const { createSnapshotCache } = require('./snapshot-cache');
 const app = express();
@@ -35,7 +36,7 @@ if (process.env.APP_USERNAME && process.env.APP_PASSWORD) {
     res.status(401).send('Vui lòng đăng nhập');
   });
 }
-app.use(express.json({ limit: '100kb' }));
+app.use(express.json({ limit: '512kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 const validSheetId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{10,200}$/.test(id);
 const validGid = gid => typeof gid === 'string' && /^\d{1,20}$/.test(gid);
@@ -83,6 +84,46 @@ app.post('/api/search-codes', async (req, res) => {
       : await snapshots.search(sheetId, codes);
     res.json({ success: true, ...result });
   } catch (error) { remoteError(res, error); }
+});
+let invoiceExports = 0;
+app.post('/api/invoices/export', async (req, res) => {
+  const { sheetId, customerId, items, format, phone = '', address = '', minPrice, pricePerWeight } = req.body || {};
+  if (!validSheetId(sheetId) || !['xlsx', 'pdf'].includes(format) ||
+      !/^\d+$/.test(String(customerId)) || !Number.isSafeInteger(Number(customerId)) || Number(customerId) < 1 ||
+      !Array.isArray(items) || !items.length || items.length > 1000 ||
+      items.some(item => !item || typeof item.code !== 'string' || !item.code.trim() || item.code.length > 200 ||
+        typeof item.date !== 'string' || item.date.length > 50 ||
+        !Number.isFinite(Number(String(item.totalWeight).replace(',', '.'))) || Number(String(item.totalWeight).replace(',', '.')) < 0) ||
+      typeof phone !== 'string' || phone.length > 50 || typeof address !== 'string' || address.length > 250) {
+    return invalid(res, 'Thông tin phiếu không hợp lệ. Chọn khách hàng và từ 1 đến 1000 mã đã tìm được; địa chỉ tối đa 250 ký tự');
+  }
+  if (invoiceExports >= 2) return res.status(429).json({ success: false, error: 'Đang xuất nhiều phiếu. Vui lòng thử lại sau ít giây' });
+  invoiceExports++;
+  try {
+    const customer = await new Promise((resolve, reject) => db.get('SELECT * FROM customers WHERE id = ?',
+      [Number(customerId)], (err, row) => err ? reject(err) : resolve(row)));
+    if (!customer) return res.status(404).json({ success: false, error: 'Khách hàng không còn tồn tại. Vui lòng chọn lại' });
+    if ((minPrice !== undefined && Number(minPrice) !== customer.minLevel) ||
+        (pricePerWeight !== undefined && Number(pricePerWeight) !== normalizeVND(customer.pricePerWeight))) {
+      return res.status(409).json({ success: false, error: 'Đơn giá khách hàng đã thay đổi. Vui lòng tra cứu lại trước khi xuất phiếu' });
+    }
+    const codes = items.map(item => normalizeCode(item.code));
+    if (new Set(codes).size !== codes.length) return invalid(res, 'Danh sách mã xuất phiếu bị trùng');
+    const result = await snapshots.search(sheetId, codes);
+    const expected = new Map(items.map(item => [normalizeCode(item.code), item]));
+    if (result.notFound.length || result.found.some(item => {
+      const old = expected.get(item.code);
+      return old.date !== item.date || Number(String(old.totalWeight).replace(',', '.')) !== Number(item.totalWeight.replace(',', '.'));
+    })) return res.status(409).json({ success: false, error: 'Ngày hoặc cân nặng đã cập nhật. Vui lòng tìm kiếm lại trước khi xuất phiếu' });
+    const { createInvoice, invoiceXlsx, invoicePdf } = require('./invoice-documents');
+    const invoice = createInvoice(customer, result.found, { phone: phone.trim(), address: address.trim() });
+    const file = format === 'xlsx' ? await invoiceXlsx(invoice) : await invoicePdf(invoice);
+    res.type(format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf');
+    res.attachment(`${invoice.filename}.${format}`); res.send(file);
+  } catch (error) {
+    console.error('Invoice export failed:', error.message);
+    res.status(502).json({ success: false, error: 'Không xuất được phiếu: ' + error.message });
+  } finally { invoiceExports--; }
 });
 function customerInput(body) {
   if (!body || typeof body.code !== 'string' || !body.code.trim() || body.code.trim().length > 100) return null;

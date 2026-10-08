@@ -112,12 +112,13 @@ function switchTab(tabName, clickEvent) {
 
     // Activate selected button
     if (clickEvent) clickEvent.currentTarget.classList.add('active');
+    else document.querySelector('[data-tab="' + tabName + '"]')?.classList.add('active');
 
     // Load customers if switching to customers tab or invoice tab
     if (tabName === 'customers') {
         loadCustomers();
     } else if (tabName === 'invoice') {
-        loadInvoiceCustomers();
+        return loadInvoiceCustomers();
     }
 }
 
@@ -127,7 +128,7 @@ let invoiceResults = [];
 // Load customers for invoice dropdown
 function loadInvoiceCustomers() {
     clearInvoiceSearch();
-    fetch('/api/customers')
+    return fetch('/api/customers')
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -247,110 +248,52 @@ function displayInvoiceResults() {
 }
 
 // Export invoice
-function exportInvoice() {
-    if (!invoiceResults.found || invoiceResults.found.length === 0) {
-        alert('Không có dữ liệu để export!');
-        return;
+async function exportInvoice(format = 'xlsx') {
+    if (!invoiceResults.found?.length || !document.getElementById('invoiceCustomer').value) {
+        alert('Vui lòng chọn khách hàng và tìm mã trước khi xuất phiếu!'); return;
     }
+    const requestId = invoiceRequest;
+    const buttons = document.querySelectorAll('[data-invoice-export]');
+    buttons.forEach(button => button.disabled = true);
+    const status = document.getElementById('invoiceLoadStatus');
+    status.innerText = 'Đang tạo phiếu ' + (format === 'pdf' ? 'PDF...' : 'Excel...');
+    try {
+        const data = document.getElementById('invoiceResultsList').dataset;
+        const response = await fetch('/api/invoices/export', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sheetId, format,
+                customerId: document.getElementById('invoiceCustomer').value,
+                items: invoiceResults.found.map(({ code, totalWeight, date }) => ({ code, totalWeight, date })),
+                minPrice: Number(data.minPrice), pricePerWeight: Number(data.pricePerWeight),
+                phone: document.getElementById('invoicePhone').value.trim(),
+                address: document.getElementById('invoiceAddress').value.trim() })
+        });
+        if (!response.ok) throw new Error((await response.json()).error || 'Không xuất được phiếu');
+        const blob = await response.blob();
+        if (requestId !== invoiceRequest) return;
+        const filename = /filename="?([^";]+)"?/.exec(response.headers.get('Content-Disposition') || '')?.[1]
+            || 'phieu_xuat_kho.' + format;
+        downloadFile(blob, filename, blob.type);
+        status.innerText = 'Đã xuất phiếu ' + (format === 'pdf' ? 'PDF' : 'Excel');
+    } catch (error) {
+        if (requestId === invoiceRequest) status.innerText = '❌ ' + error.message;
+    } finally { buttons.forEach(button => button.disabled = false); }
+}
 
-    const phone = document.getElementById('invoicePhone').value.trim();
-    const address = document.getElementById('invoiceAddress').value.trim();
-    const resultsList = document.getElementById('invoiceResultsList');
-    const totalPayment = parseFloat(resultsList.dataset.totalPayment);
-    const minPrice = parseFloat(resultsList.dataset.minPrice) || 0;
-    const pricePerWeight = Number(resultsList.dataset.pricePerWeight) || 0;
-    const customerCode = resultsList.dataset.customerCode;
-
-    const today = new Date();
-    const day = String(today.getDate()).padStart(2, '0');
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const year = today.getFullYear();
-    const dateStr = `Ngày ${day} tháng ${month} năm ${year}`;
-
-    let html = `
-        <table border="1" cellpadding="5" cellspacing="0" style="width: 100%; border-collapse: collapse; border-color: #bbb;">
-            <tr>
-                <td colspan="8" style="text-align: center; font-weight: bold; font-size: 18px; padding: 10px; border: 1px solid #bbb;">PHIẾU XUẤT KHO</td>
-            </tr>
-            <tr>
-                <td colspan="8" style="text-align: center; padding: 5px; border: 1px solid #bbb;">${dateStr}</td>
-            </tr>
-            <tr>
-                <td colspan="8" style="padding: 5px; border: none;"></td>
-            </tr>
-            <tr>
-                <td colspan="2" style="padding: 3px; border: 1px solid #bbb;"><strong>Người Nhận:</strong> ${AppUtils.escapeHTML(customerCode)}</td>
-                <td colspan="3" style="padding: 3px; border: 1px solid #bbb;"><strong>SĐT:</strong> ${AppUtils.escapeHTML(phone)}</td>
-                <td colspan="3" style="padding: 3px; border: 1px solid #bbb;"><strong>Địa Chỉ:</strong> ${AppUtils.escapeHTML(address)}</td>
-            </tr>
-            <tr>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">STT</td>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Mã vận chuyển</td>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Hàng hóa</td>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Số lượng</td>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Cân nặng (Kg)</td>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Đơn giá (VNĐ)</td>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Thành tiền (VNĐ)</td>
-                <td style="text-align: center; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Thời gian về kho HN</td>
-            </tr>`;
-
-    let stt = 1;
-    let totalWeight = 0;
-
-    invoiceResults.found.forEach(item => {
-        const actualWeight = roundUpToOneDecimal(parseFloat(item.totalWeight.replace(',', '.')));
-        totalWeight += actualWeight;
-        const price = actualWeight * pricePerWeight;
-        const finalPrice = Math.max(price, minPrice);
-
-        html += `<tr>
-            <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">${stt}</td>
-            <td style="padding: 5px; border: 1px solid #bbb; text-align: left;">&#39;${AppUtils.escapeHTML(item.code)}</td>
-            <td style="padding: 5px; border: 1px solid #bbb;">Hàng TMDT</td>
-            <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">1</td>
-            <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">${actualWeight.toFixed(1)}</td>
-            <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">${formatExcelNumber(pricePerWeight)}</td>
-            <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">${formatExcelNumber(finalPrice)}</td>
-            <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">${AppUtils.escapeHTML(formatDate(item.date))}</td>
-        </tr>`;
-        stt++;
-    });
-
-    html += `<tr style="font-weight: bold;">
-        <td colspan="3" style="padding: 5px; border: 1px solid #bbb;">Tổng</td>
-        <td style="text-align: center; padding: 5px; border: 1px solid #bbb;">${invoiceResults.found.length}</td>
-        <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">${totalWeight.toFixed(1)}</td>
-        <td style="padding: 5px; border: 1px solid #bbb;"></td>
-        <td style="text-align: right; padding: 5px; border: 1px solid #bbb;">-</td>
-        <td style="padding: 5px; border: 1px solid #bbb;"></td>
-    </tr>
-    <tr>
-        <td colspan="6" style="text-align: right; font-weight: bold; padding: 5px; border: 1px solid #bbb;">Tổng tiền thanh toán</td>
-        <td style="text-align: right; font-weight: bold; padding: 5px; background-color: #FFFF00; border: 1px solid #bbb;">${formatExcelNumber(totalPayment)}</td>
-        <td style="padding: 5px; border: 1px solid #bbb;"></td>
-    </tr>
-    <tr>
-        <td colspan="8" style="padding: 10px; border: none;"></td>
-    </tr>
-    <tr>
-        <td colspan="4" style="text-align: center; padding: 5px; border: none;"><strong>Người xuất kho</strong><br/>(ký, họ tên)</td>
-        <td colspan="4" style="text-align: center; padding: 5px; border: none;"><strong>Người nhận hàng</strong><br/>(ký, họ tên)</td>
-    </tr>
-    </table>`;
-
-    const excelFile = `
-        <html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body { font-family: 'Times New Roman', serif; margin: 10px; }
-                table { border-collapse: collapse; }
-            </style>
-        </head>
-        <body>${html}</body>
-        </html>`;
-
-    downloadFile(excelFile, `phieu_xuat_kho_${customerCode.replace(/[^A-Za-z0-9_-]/g, '_')}_${day}-${month}-${year}.xls`, 'application/vnd.ms-excel');
+async function prepareInvoiceFromSearch() {
+    if (!searchResults.found?.length) { alert('Chưa có mã tìm được để lập phiếu'); return; }
+    const result = searchResults, requestId = shipmentRequest;
+    await switchTab('invoice');
+    if (requestId !== shipmentRequest) return;
+    document.getElementById('invoiceCodesInput').value = result.found.map(item => item.code).join('\n');
+    invoiceResults = result;
+    document.getElementById('invoiceLoadStatus').innerText = 'Đã lấy ' + result.found.length + ' mã. Chọn khách hàng để xuất Excel hoặc PDF.';
+}
+function changeInvoiceCustomer() {
+    const result = invoiceResults;
+    clearInvoiceSearch();
+    invoiceResults = result;
+    if (result.found?.length && document.getElementById('invoiceCustomer').value) displayInvoiceResults();
 }
 
 // Clear invoice results
@@ -774,7 +717,7 @@ function deleteCustomer(id) {
 // Load customers when page loads
 document.addEventListener('DOMContentLoaded', () => {
     loadSheetCacheStatus();
-    document.getElementById('invoiceCustomer').addEventListener('change', clearInvoiceSearch);
+    document.getElementById('invoiceCustomer').addEventListener('change', changeInvoiceCustomer);
     document.getElementById('invoiceCodesInput').addEventListener('input', clearInvoiceSearch);
     document.getElementById('codesInput').addEventListener('input', () => {
         shipmentRequest++;

@@ -49,6 +49,9 @@ test('real SQLite customer CRUD, validation, malformed JSON and static assets', 
   const cache = await (await fetch(base + '/api/cache/status/validsheetid')).json();
   assert.equal(cache.cache.ready, false);
   assert.equal((await send('/api/cache/refresh', 'POST', { sheetId: 'bad' })).status, 400);
+  assert.equal((await send('/api/invoices/export', 'POST', {})).status, 400);
+  assert.equal((await send('/api/invoices/export', 'POST', { sheetId: 'validsheetid',
+    customerId: 99999, format: 'pdf', items: [{ code: '79036906835213', totalWeight: '0.5', date: '4/10' }] })).status, 404);
   assert.equal((await send('/api/search-codes', 'POST', { sheetId: 'validsheetid', codes: 'ABC' })).status, 400);
   assert.equal((await send('/api/customers', 'POST', { code: '   ', minLevel: 0, pricePerWeight: 50 })).status, 400);
   assert.equal((await send('/api/customers', 'POST', { code: 'A', minLevel: -1, pricePerWeight: 50 })).status, 400);

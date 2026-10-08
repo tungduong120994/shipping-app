@@ -115,11 +115,31 @@ function frontend() {
   };
   const context = { AppUtils: utils, AbortController, console, alert() {},
     setTimeout() {}, clearTimeout() {},
-    document: { getElementById: node, addEventListener() {} } };
+    document: { getElementById: node, querySelectorAll: () => [], addEventListener() {} } };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(require.resolve('../public/script.js'), 'utf8'), context);
   return { context, node };
 }
+
+test('PDF export submits current invoice and ignores download after inputs are cleared', async () => {
+  const { context, node } = frontend();
+  node('invoiceCustomer').value = '7';
+  node('invoiceResultsList').dataset = { minPrice: '30000', pricePerWeight: '50000' };
+  vm.runInContext("invoiceResults = {found:[{code:'79036906835213',totalWeight:'0.5',date:'4/10'}]}", context);
+  let finish, payload, downloaded = false;
+  context.fetch = (url, options) => {
+    assert.equal(url, '/api/invoices/export'); payload = JSON.parse(options.body);
+    return new Promise(resolve => { finish = resolve; });
+  };
+  context.downloadFile = () => { downloaded = true; };
+  const pending = context.exportInvoice('pdf');
+  assert.equal(payload.format, 'pdf'); assert.equal(payload.customerId, '7');
+  assert.equal(payload.minPrice, 30000); assert.equal(payload.items[0].date, '4/10');
+  context.clearInvoiceSearch();
+  finish({ ok: true, blob: async () => ({ type: 'application/pdf' }) });
+  await pending;
+  assert.equal(downloaded, false);
+});
 test('editing customer then saving restores add mode and quoted codes render safely', async () => {
   const { context, node } = frontend();
   context.fetch = async () => ({ json: async () => ({ success: true, customers: [] }) });
