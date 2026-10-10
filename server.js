@@ -1,8 +1,7 @@
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
-const sqlite3 = require('sqlite3').verbose();
+const { openCustomerDatabase } = require('./customer-database');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { searchSheetRows, normalizeCode } = require('./sheet-utils');
 const { normalizeVND } = require('./public/app-utils');
@@ -13,13 +12,11 @@ const sheets = createSheetService(fetch);
 const snapshots = createSnapshotCache(sheets);
 const defaultSheetId = process.env.SHEET_ID || '1hLDE0Hy87ekRhf-1KUhXdrHHdH5LT176BG-0K4yHbaE';
 const port = process.env.PORT || 3000;
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'customers.db');
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-const db = new sqlite3.Database(dbPath);
+const db = openCustomerDatabase();
 const revision = process.env.RENDER_GIT_COMMIT || process.env.APP_REVISION || 'local';
 app.disable('x-powered-by');
 app.get('/health', (req, res) => {
-  db.get('SELECT 1 AS ready', err => res.status(err ? 503 : 200).json({ ready: !err, revision }));
+  db.get('SELECT 1 AS ready', err => res.status(err ? 503 : 200).json({ ready: !err, revision, customerStorage: db.storage }));
 });
 // Optional access protection: configure both variables on the hosting service.
 if (Boolean(process.env.APP_USERNAME) !== Boolean(process.env.APP_PASSWORD)) {

@@ -15,7 +15,8 @@ async function startServer(t, auth = false) {
   const child = spawn(process.execPath, ['server.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: { ...process.env, PORT: String(port), DATABASE_PATH: path.join(directory, 'test.db'),
-      APP_USERNAME: auth ? 'test-user' : '', APP_PASSWORD: auth ? 'test-password' : '', SHEET_CACHE_WARMUP: '0' },
+      APP_USERNAME: auth ? 'test-user' : '', APP_PASSWORD: auth ? 'test-password' : '', SHEET_CACHE_WARMUP: '0',
+      TURSO_DATABASE_URL: '', TURSO_AUTH_TOKEN: '' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let logs = '';

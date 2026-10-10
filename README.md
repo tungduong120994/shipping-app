@@ -39,6 +39,7 @@
 - Sheet tải lỗi sẽ chặn kết quả toàn bộ lượt tra cứu, tránh lập phiếu từ dữ liệu chưa đầy đủ.
 - `/health` trả trạng thái database và commit đang chạy (`RENDER_GIT_COMMIT`).
 - `DATABASE_PATH`: đường dẫn SQLite. Mặc định vẫn dùng `customers.db` cũ.
+- Render Free: dùng Turso Free qua `TURSO_DATABASE_URL` và `TURSO_AUTH_TOKEN`, lưu khách hàng trực tiếp bên ngoài Render. Xem [hướng dẫn cấu hình và chuyển dữ liệu](docs/free-customer-storage.md). `/health` báo `customerStorage: "turso"` khi đã chuyển; cấu hình thiếu hoặc kết nối lỗi không tự chuyển sang SQLite tạm.
 - Trên Render, chỉ dùng đường dẫn persistent disk đã được cấu hình khi cần giữ dữ liệu qua deploy. Đổi biến môi trường không tự di chuyển database; sao lưu và chép database cũ trước khi đổi đường dẫn.
 - `APP_USERNAME` và `APP_PASSWORD`: cấu hình cả hai để bật đăng nhập Basic cho giao diện/API qua HTTPS. Để trống cả hai giữ cách truy cập cũ. Không ghi mật khẩu vào Git.
 - Phiếu xuất kho có hai định dạng: Excel `.xlsx` thật và PDF A4, theo mẫu THN (logo, địa chỉ, bảng hàng, tổng tiền, chữ ký và lưu ý).
