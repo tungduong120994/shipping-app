@@ -47,6 +47,21 @@ test('real SQLite customer CRUD, validation, malformed JSON and static assets', 
     method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
   assert.equal((await fetch(base + '/app-utils.js')).status, 200);
+  assert.equal((await fetch(base + '/sheet-management.js')).status, 200);
+  const initialSources = (await (await fetch(base + '/api/sheet-sources')).json()).sources;
+  assert.equal(initialSources.length, 1);
+  assert.equal(initialSources[0].active, 1);
+  assert.equal((await send('/api/sheet-sources', 'POST', { year: 2030, name: 'Năm 2030', url: 'https://evil.com' })).status, 400);
+  const sourceInput = { year: 2030, name: "Năm 2030 O'Brien", url: 'https://docs.google.com/spreadsheets/d/newvalidsheetid/edit' };
+  assert.equal((await send('/api/sheet-sources', 'POST', sourceInput)).status, 201);
+  assert.equal((await send('/api/sheet-sources', 'POST', sourceInput)).status, 400);
+  assert.equal((await fetch(base + '/api/sheet-sources/' + initialSources[0].year, { method: 'DELETE' })).status, 409);
+  assert.equal((await send('/api/sheet-sources/2030', 'PUT', { ...sourceInput, url: 'https://docs.google.com/spreadsheets/d/editedvalidsheetid/edit' })).status, 200);
+  assert.equal((await send('/api/sheet-sources/2030/activate', 'POST', {})).status, 200);
+  const configured = (await (await fetch(base + '/api/sheet-sources')).json()).sources;
+  assert.equal(configured.find(source => source.active).sheetId, 'editedvalidsheetid');
+  assert.equal((await send('/api/sheet-sources/' + initialSources[0].year + '/activate', 'POST', {})).status, 200);
+  assert.equal((await fetch(base + '/api/sheet-sources/2030', { method: 'DELETE' })).status, 200);
   const cache = await (await fetch(base + '/api/cache/status/validsheetid')).json();
   assert.equal(cache.cache.ready, false);
   assert.equal((await send('/api/cache/refresh', 'POST', { sheetId: 'bad' })).status, 400);

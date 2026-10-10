@@ -6,6 +6,7 @@ function inputCodes(id) {
         .map(AppUtils.normalizeInputCode).filter(Boolean))];
 }
 async function requestCodes(codes, signal) {
+    if (!sheetId) throw new Error('Chưa tải được cấu hình sheet. Mở Quản Lý Sheet và bấm Tải lại danh sách');
     const response = await fetch('/api/search-codes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sheetId, codes }), signal
@@ -16,7 +17,7 @@ async function requestCodes(codes, signal) {
     return result;
 }
 
-let sheetId = '1hLDE0Hy87ekRhf-1KUhXdrHHdH5LT176BG-0K4yHbaE';
+let sheetId = null;
 // Note: gids are now automatically detected by server, no need to specify them here
 let cacheStatusTimer;
 function displaySheetCacheStatus(cache) {
@@ -32,16 +33,22 @@ function displaySheetCacheStatus(cache) {
     cacheStatusTimer = setTimeout(loadSheetCacheStatus, cache.refreshing ? 2000 : 60000);
 }
 async function loadSheetCacheStatus() {
+    const requestedSheet = sheetId;
+    if (!requestedSheet) return;
     try {
-        const response = await fetch('/api/cache/status/' + sheetId);
+        const response = await fetch('/api/cache/status/' + requestedSheet);
         const data = await response.json();
+        if (requestedSheet !== sheetId) return;
         if (!response.ok || !data.success) throw new Error(data.error || 'Không đọc được trạng thái cache');
         displaySheetCacheStatus(data.cache);
     } catch (error) {
+        if (requestedSheet !== sheetId) return;
         document.getElementById('sheetCacheStatus').textContent = error.message;
     }
 }
 async function refreshSheetCache() {
+    const requestedSheet = sheetId;
+    if (!requestedSheet) return;
     const button = document.getElementById('refreshSheetCacheButton');
     let submitted = false;
     button.disabled = true;
@@ -50,6 +57,7 @@ async function refreshSheetCache() {
         const response = await fetch('/api/cache/refresh', { method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sheetId }) });
         const data = await response.json();
+        if (requestedSheet !== sheetId) return;
         if (!response.ok || !data.success) throw new Error(data.error || 'Không cập nhật được dữ liệu');
         submitted = true;
         displaySheetCacheStatus(data.cache);
@@ -62,8 +70,9 @@ async function refreshSheetCache() {
             ? 'Đang cập nhật dữ liệu. Thời điểm cập nhật sẽ hiển thị khi hoàn tất.'
             : 'Dữ liệu đã cập nhật. Vui lòng tìm kiếm lại.';
     } catch (error) {
+        if (requestedSheet !== sheetId) return;
         document.getElementById('sheetCacheStatus').textContent = error.message;
-    } finally { if (!submitted) button.disabled = false; }
+    } finally { if (!submitted && requestedSheet === sheetId) button.disabled = false; }
 }
 
 // ==================== FORMATTING HELPERS ====================
@@ -119,6 +128,8 @@ function switchTab(tabName, clickEvent) {
         loadCustomers();
     } else if (tabName === 'invoice') {
         return loadInvoiceCustomers();
+    } else if (tabName === 'sheets') {
+        return loadSheetSources();
     }
 }
 
@@ -716,7 +727,7 @@ function deleteCustomer(id) {
 
 // Load customers when page loads
 document.addEventListener('DOMContentLoaded', () => {
-    loadSheetCacheStatus();
+    loadSheetSources();
     document.getElementById('invoiceCustomer').addEventListener('change', changeInvoiceCustomer);
     document.getElementById('invoiceCodesInput').addEventListener('input', clearInvoiceSearch);
     document.getElementById('codesInput').addEventListener('input', () => {

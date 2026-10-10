@@ -11,6 +11,8 @@
 
         /* Tab Navigation */
         .tab-navigation { display: flex; border-bottom: 2px solid #ddd; margin-bottom: 20px; gap: 10px; }
+        .tab-navigation { flex-wrap: wrap; }
+        button:disabled { opacity: 0.55; cursor: wait; }
         .tab-button { padding: 12px 20px; background: none; border: none; cursor: pointer; font-size: 16px; border-bottom: 3px solid transparent; transition: all 0.3s; color: #666; }
         .tab-button:hover { color: #007bff; }
         .tab-button.active { color: #007bff; border-bottom-color: #007bff; font-weight: bold; }
@@ -39,14 +41,18 @@
     <div class="container">
         <h1>📦 Hệ Thống Quản Lý Vận Đơn & Khách Hàng</h1>
         <div class="section" style="margin-top: 0;">
+            <label for="searchSheetYear">Năm dữ liệu đang tra cứu:</label>
+            <select id="searchSheetYear" onchange="selectSearchYear()" disabled style="padding:10px; margin-bottom:10px; max-width:100%;"></select>
+            <div id="selectedSheetLabel" style="margin-bottom:10px;"></div>
             <span id="sheetCacheStatus" role="status">Đang kiểm tra dữ liệu Google Sheets...</span>
-            <button id="refreshSheetCacheButton" onclick="refreshSheetCache()">🔄 Cập nhật dữ liệu</button>
+            <button id="refreshSheetCacheButton" data-sheet-required disabled onclick="refreshSheetCache()">🔄 Cập nhật dữ liệu</button>
         </div>
 
         <div class="tab-navigation">
             <button data-tab="shipments" class="tab-button active" onclick="switchTab('shipments', event)">🚚 Quản Lý Vận Đơn</button>
             <button data-tab="invoice" class="tab-button" onclick="switchTab('invoice', event)">📋 Phiếu Xuất Kho</button>
             <button class="tab-button" onclick="switchTab('customers', event)">👥 Quản Lý Khách Hàng</button>
+            <button data-tab="sheets" class="tab-button" onclick="switchTab('sheets', event)">📑 Quản Lý Sheet</button>
         </div>
 
         <!-- Tab 1: Quản Lý Vận Đơn -->
@@ -59,7 +65,7 @@
 301963305121-2
 VD6640(78983347038248)
 ..."></textarea>
-                <button onclick="searchCodes()">🔍 Tìm Kiếm</button>
+                <button data-sheet-required disabled onclick="searchCodes()">🔍 Tìm Kiếm</button>
                 <p id="loadStatus"></p>
             </div>
 
@@ -99,7 +105,7 @@ VD6640(78983347038248)
                 <textarea id="invoiceCodesInput" placeholder="301963305121
 301963305121-1
 ..."></textarea>
-                <button onclick="searchInvoiceCodes()">🔍 Tìm Kiếm</button>
+                <button data-sheet-required disabled onclick="searchInvoiceCodes()">🔍 Tìm Kiếm</button>
                 <p id="invoiceLoadStatus"></p>
             </div>
 
@@ -140,9 +146,27 @@ VD6640(78983347038248)
                 <div id="customersList"></div>
             </div>
         </div>
+        <div id="tab-sheets" class="tab-content">
+            <div class="section">
+                <h2>Quản lý Google Sheet theo năm</h2>
+                <p>Mỗi năm dùng một file Google Sheet. Thêm năm mới rồi bấm <strong>Đặt mặc định</strong>. Các tab tháng trong file được đọc tự động. File cần được chia sẻ để ứng dụng đọc được.</p>
+                <label for="sheetYearInput">Năm:</label>
+                <input id="sheetYearInput" type="number" min="2000" max="2100" placeholder="VD: 2027" />
+                <label for="sheetNameInput">Tên hiển thị:</label>
+                <input id="sheetNameInput" maxlength="100" placeholder="VD: Hàng về năm 2027" />
+                <label for="sheetUrlInput">Link Google Sheet:</label>
+                <input id="sheetUrlInput" type="url" maxlength="1000" placeholder="https://docs.google.com/spreadsheets/d/.../edit" />
+                <button id="sheetSaveButton" onclick="saveSheetSource()">➕ Thêm sheet</button>
+                <button onclick="resetSheetForm()" style="background:#6c757d;">Hủy sửa</button>
+                <button onclick="loadSheetSources()">Tải lại danh sách</button>
+                <p id="sheetManagementStatus" role="status"></p>
+                <div id="sheetSourcesList" style="overflow-x:auto;"></div>
+            </div>
+        </div>
     </div>
 
     <script src="app-utils.js"></script>
     <script src="script.js"></script>
+    <script src="sheet-management.js"></script>
 </body>
 </html>

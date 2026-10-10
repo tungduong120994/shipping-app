@@ -13,6 +13,8 @@ const snapshots = createSnapshotCache(sheets);
 const defaultSheetId = process.env.SHEET_ID || '1hLDE0Hy87ekRhf-1KUhXdrHHdH5LT176BG-0K4yHbaE';
 const port = process.env.PORT || 3000;
 const db = openCustomerDatabase();
+const { createSheetSettings, parseSheetInput } = require('./sheet-settings');
+const sheetSettings = createSheetSettings(db);
 const revision = process.env.RENDER_GIT_COMMIT || process.env.APP_REVISION || 'local';
 app.disable('x-powered-by');
 app.get('/health', (req, res) => {
@@ -40,6 +42,53 @@ const validGid = gid => typeof gid === 'string' && /^\d{1,20}$/.test(gid);
 const invalid = (res, error) => res.status(400).json({ success: false, error });
 const remoteError = (res, error) => res.status(502).json({ success: false,
   error: `Không thể hoàn tất tra cứu: ${error.message}. Kết quả chưa được dùng để lập phiếu.` });
+function warmActiveSheet(source) {
+  if (process.env.SHEET_CACHE_WARMUP === '0') return;
+  if (stopCacheWarmup) stopCacheWarmup();
+  stopCacheWarmup = snapshots.start(source.sheetId);
+}
+app.get('/api/sheet-sources', async (req, res) => {
+  try { res.json({ success: true, sources: await sheetSettings.list() }); }
+  catch (error) { dbError(res, error); }
+});
+app.post('/api/sheet-sources', async (req, res) => {
+  const source = parseSheetInput(req.body);
+  if (!source) return invalid(res, 'Nhập năm 2000–2100, tên và link Google Sheets hợp lệ (https://docs.google.com/spreadsheets/d/...)');
+  try {
+    await sheetSettings.add(source);
+    res.status(201).json({ success: true });
+  } catch (error) {
+    if (error.message.includes('UNIQUE constraint')) return invalid(res, 'Năm này đã có sheet. Bấm Sửa để đổi link');
+    dbError(res, error);
+  }
+});
+app.put('/api/sheet-sources/:year', async (req, res) => {
+  const source = parseSheetInput({ ...req.body, year: req.params.year });
+  if (!source) return invalid(res, 'Tên, năm hoặc link Google Sheets không hợp lệ');
+  try {
+    if (!await sheetSettings.edit(source)) return res.status(404).json({ success: false, error: 'Không tìm thấy năm này' });
+    const active = await sheetSettings.active();
+    if (active.year === source.year) warmActiveSheet(active);
+    res.json({ success: true });
+  } catch (error) { dbError(res, error); }
+});
+app.post('/api/sheet-sources/:year/activate', async (req, res) => {
+  const year = Number(req.params.year);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return invalid(res, 'Năm không hợp lệ');
+  try {
+    if (!await sheetSettings.activate(year)) return res.status(404).json({ success: false, error: 'Không tìm thấy năm này' });
+    warmActiveSheet(await sheetSettings.active());
+    res.json({ success: true });
+  } catch (error) { dbError(res, error); }
+});
+app.delete('/api/sheet-sources/:year', async (req, res) => {
+  const year = Number(req.params.year);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return invalid(res, 'Năm không hợp lệ');
+  try {
+    if (!await sheetSettings.remove(year)) return res.status(409).json({ success: false, error: 'Không thể xóa sheet mặc định hoặc năm không tồn tại. Chọn năm khác làm mặc định trước'});
+    res.json({ success: true });
+  } catch (error) { dbError(res, error); }
+});
 app.get('/api/cache/status/:sheetId', (req, res) => {
   if (!validSheetId(req.params.sheetId)) return invalid(res, 'ID Google Sheets không hợp lệ');
   res.json({ success: true, cache: snapshots.status(req.params.sheetId) });
@@ -192,12 +241,17 @@ db.run(`CREATE TABLE IF NOT EXISTS customers (
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL,
   minLevel REAL NOT NULL, pricePerWeight REAL NOT NULL,
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
-)`, err => {
+)`, async err => {
   if (err) { console.error('Cannot initialize database:', err.message); process.exitCode = 1; db.close(); return; }
+  try {
+    const year = Number(process.env.SHEET_YEAR || new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', year: 'numeric' }).format(new Date()));
+    await sheetSettings.initialize(defaultSheetId, year);
+    const active = await sheetSettings.active();
   server = app.listen(port, () => {
     console.log(`Shipping app listening on port ${port}`);
-    if (process.env.SHEET_CACHE_WARMUP !== '0') stopCacheWarmup = snapshots.start(defaultSheetId);
+    warmActiveSheet(active);
   });
+  } catch (error) { console.error('Cannot initialize sheet settings'); process.exitCode = 1; db.close(); }
 });
 function shutdown() {
   if (stopCacheWarmup) stopCacheWarmup();

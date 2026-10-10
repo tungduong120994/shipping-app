@@ -40,6 +40,8 @@
 - `/health` trả trạng thái database và commit đang chạy (`RENDER_GIT_COMMIT`).
 - `DATABASE_PATH`: đường dẫn SQLite. Mặc định vẫn dùng `customers.db` cũ.
 - Render Free: dùng Turso Free qua `TURSO_DATABASE_URL` và `TURSO_AUTH_TOKEN`, lưu khách hàng trực tiếp bên ngoài Render. Xem [hướng dẫn cấu hình và chuyển dữ liệu](docs/free-customer-storage.md). `/health` báo `customerStorage: "turso"` khi đã chuyển; cấu hình thiếu hoặc kết nối lỗi không tự chuyển sang SQLite tạm.
+- Tab **Quản Lý Sheet** lưu link theo năm trong cùng database Turso. Thêm năm mới, nhập tên và link rồi **Đặt mặc định**; chọn năm cũ ở đầu trang để tra cứu lịch sử. Sửa link sẽ xóa kết quả cũ trên trang để tra cứu lại đúng file. Không xóa được năm đang mặc định; xóa cấu hình không xóa file Google Sheets.
+- Lần đầu khởi động tạo cấu hình từ link cũ (`SHEET_ID`) và năm hiện tại tại Việt Nam (`SHEET_YEAR` có thể chỉ định năm khởi tạo). Những lần deploy sau giữ cấu hình đã lưu, không tự chuyển năm khi sang năm mới. Cache nền nạp file mặc định được lưu trong database.
 - Trên Render, chỉ dùng đường dẫn persistent disk đã được cấu hình khi cần giữ dữ liệu qua deploy. Đổi biến môi trường không tự di chuyển database; sao lưu và chép database cũ trước khi đổi đường dẫn.
 - `APP_USERNAME` và `APP_PASSWORD`: cấu hình cả hai để bật đăng nhập Basic cho giao diện/API qua HTTPS. Để trống cả hai giữ cách truy cập cũ. Không ghi mật khẩu vào Git.
 - Phiếu xuất kho có hai định dạng: Excel `.xlsx` thật và PDF A4, theo mẫu THN (logo, địa chỉ, bảng hàng, tổng tiền, chữ ký và lưu ý).

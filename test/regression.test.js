@@ -118,6 +118,7 @@ function frontend() {
     document: { getElementById: node, querySelectorAll: () => [], addEventListener() {} } };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(require.resolve('../public/script.js'), 'utf8'), context);
+  vm.runInContext("sheetId = 'validsheetid'", context);
   return { context, node };
 }
 
@@ -139,6 +140,34 @@ test('PDF export submits current invoice and ignores download after inputs are c
   finish({ ok: true, blob: async () => ({ type: 'application/pdf' }) });
   await pending;
   assert.equal(downloaded, false);
+});
+
+test('switching configured sheet year clears invoice and shipment results and ignores old cache responses', async () => {
+  const { context, node } = frontend();
+  vm.runInContext(fs.readFileSync(require.resolve('../public/sheet-management.js'), 'utf8'), context);
+  vm.runInContext(`configuredSheets = [{ year: 2026, sheetId: 'validsheetid', name: 'Cũ' },
+    { year: 2027, sheetId: 'newvalidsheetid', name: 'Mới' }];
+    invoiceResults = {found:[{code:'ABC',totalWeight:'0.5',date:'4/10'}]};
+    searchResults = {found:[{code:'ABC'}]};`, context);
+  let oldCache;
+  context.fetch = url => {
+    if (url.endsWith('/validsheetid')) return new Promise(resolve => { oldCache = resolve; });
+    return Promise.resolve({ ok: true, json: async () => ({ success: true,
+      cache: { ready: true, refreshing: false, sheetCount: 10, updatedAt: '2026-10-10T00:00:00Z' } }) });
+  };
+  const pending = context.loadSheetCacheStatus();
+  node('searchSheetYear').value = '2027';
+  context.selectSearchYear();
+  assert.equal(vm.runInContext('sheetId', context), 'newvalidsheetid');
+  assert.equal(vm.runInContext('invoiceResults.found', context), undefined);
+  assert.equal(vm.runInContext('searchResults.found', context), undefined);
+  assert.equal(node('invoiceResults').style.display, 'none');
+  await new Promise(resolve => setImmediate(resolve));
+  const label = node('sheetCacheStatus').textContent;
+  oldCache({ ok: true, json: async () => ({ success: true, cache: { ready: false, refreshing: true, sheetCount: 0 } }) });
+  await pending;
+  assert.equal(node('sheetCacheStatus').textContent, label);
+  assert.equal(node('selectedSheetLabel').textContent, 'Mới · Năm 2027');
 });
 test('editing customer then saving restores add mode and quoted codes render safely', async () => {
   const { context, node } = frontend();
