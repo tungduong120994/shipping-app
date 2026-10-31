@@ -274,6 +274,8 @@ async function exportInvoice(format = 'xlsx') {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sheetId, format,
                 customerId: document.getElementById('invoiceCustomer').value,
+                hideArrivalDate: document.getElementById('invoiceHideArrivalDate').checked === true,
+                arrivalDate: document.getElementById('invoiceArrivalDate').value || '',
                 items: invoiceResults.found.map(({ code, totalWeight, date }) => ({ code, totalWeight, date })),
                 minPrice: Number(data.minPrice), pricePerWeight: Number(data.pricePerWeight),
                 phone: document.getElementById('invoicePhone').value.trim(),
@@ -322,6 +324,9 @@ function clearInvoiceResults() {
     clearInvoiceSearch();
     document.getElementById('invoiceCodesInput').value = '';
     document.getElementById('invoicePhone').value = '';
+    document.getElementById('invoiceHideArrivalDate').checked = false;
+    document.getElementById('invoiceArrivalDate').value = '';
+    document.getElementById('invoiceArrivalDate').disabled = false;
     document.getElementById('invoiceAddress').value = '';
     document.getElementById('invoiceResults').style.display = 'none';
     document.getElementById('invoiceLoadStatus').innerText = '';

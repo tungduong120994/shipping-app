@@ -3,6 +3,30 @@ const assert = require('node:assert/strict');
 const ExcelJS = require('exceljs');
 const { createInvoice, invoiceXlsx, invoicePdf } = require('../invoice-documents');
 
+test('arrival date options preserve issue date and remove the whole column when hidden', async () => {
+  const customer = { code: 'KH', minLevel: 0, pricePerWeight: 27 };
+  const items = [{ code: '79036906835213', totalWeight: '0.5', date: '4/10' }];
+  const defaults = createInvoice(customer, items);
+  const changed = createInvoice(customer, items, { arrivalDate: '2026-11-02' });
+  assert.equal(defaults.rows[0].date, '4/10');
+  assert.equal(changed.rows[0].date, '02/11/2026');
+  assert.equal(defaults.dateLabel, changed.dateLabel);
+  assert.equal(changed.totalPayment, defaults.totalPayment);
+  assert.throws(() => createInvoice(customer, items, { arrivalDate: '2026-02-30' }), /không hợp lệ/);
+  for (const hideArrivalDate of [false, true]) {
+    const invoice = createInvoice(customer, items, { hideArrivalDate, arrivalDate: '2026-11-02' });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await invoiceXlsx(invoice));
+    const sheet = workbook.worksheets[0];
+    assert.equal(sheet.getCell('H9').value, hideArrivalDate ? null : 'Thời gian hàng về kho HN');
+    assert.equal(sheet.getCell('H10').value, hideArrivalDate ? null : '02/11/2026');
+    assert.equal(sheet.pageSetup.printArea, hideArrivalDate ? 'A1:G22' : 'A1:H22');
+    assert.ok(sheet.getCell('A5').value.includes(invoice.dateLabel));
+    assert.equal(sheet.getCell('G12').value.result, defaults.totalPayment);
+    assert.equal((await invoicePdf(invoice)).subarray(0, 5).toString(), '%PDF-');
+  }
+});
+
 test('invoice preserves legacy rounding, shorthand rate and per-code minimum', () => {
   const invoice = createInvoice({ code: 'KH', minLevel: 30000, pricePerWeight: 50 },
     [{ code: '79036906835213', totalWeight: '0,5', date: '4/10' },

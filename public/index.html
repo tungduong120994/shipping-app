@@ -111,6 +111,10 @@ VD6640(78983347038248)
 
             <div class="section results" id="invoiceResults" style="display: none;">
                 <h2>Chi Tiết Phiếu Xuất Kho</h2>
+                <label for="invoiceArrivalDate">Ngày hàng về kho trên phiếu (để trống để lấy ngày từng mã trong sheet):</label>
+                <input type="date" id="invoiceArrivalDate" style="max-width:240px;" />
+                <label><input type="checkbox" id="invoiceHideArrivalDate" style="width:auto;" onchange="document.getElementById('invoiceArrivalDate').disabled = this.checked;" /> Không xuất ngày hàng về kho (bỏ cột ngày)</label>
+                <p>Ngày lập phiếu dưới tiêu đề luôn được giữ nguyên. Ngày chọn chỉ áp dụng trên file xuất, không sửa Google Sheet.</p>
                 <button data-invoice-export onclick="exportInvoice('xlsx')">📊 Xuất Excel (.xlsx)</button>
                 <button data-invoice-export onclick="exportInvoice('pdf')">📄 Xuất PDF</button>
                 <button onclick="clearInvoiceResults()" style="background-color: #6c757d;">🔄 Xóa</button>

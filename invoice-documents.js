@@ -9,7 +9,16 @@ const HEADERS = ['STT', 'Mã vận chuyển', 'Loại dịch vụ', 'Số kiện
   'Đơn giá (VNĐ)', 'Thành tiền (VNĐ)', 'Thời gian hàng về kho HN'];
 const WIDTHS = [4.7109375, 21.140625, 17.28515625, 9.42578125, 13.140625, 10, 13.7109375, 19.140625];
 
-function createInvoice(customer, found, { phone = '', address = '', date = new Date() } = {}) {
+function validArrivalDate(value) {
+  if (typeof value !== 'string') return false;
+  if (value === '') return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(value + 'T00:00:00Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+function createInvoice(customer, found, { phone = '', address = '', date = new Date(), hideArrivalDate = false, arrivalDate = '' } = {}) {
+  if (typeof hideArrivalDate !== 'boolean' || !validArrivalDate(arrivalDate)) throw new Error('Ngày hàng về kho không hợp lệ');
+  const override = arrivalDate ? arrivalDate.split('-').reverse().join('/') : '';
   const rate = normalizeVND(customer.pricePerWeight), minimum = Number(customer.minLevel);
   if (!Number.isFinite(rate) || rate <= 0 || !Number.isFinite(minimum) || minimum < 0) {
     throw new Error('Đơn giá hoặc tiền tối thiểu của khách hàng không hợp lệ');
@@ -22,10 +31,10 @@ function createInvoice(customer, found, { phone = '', address = '', date = new D
     const amount = Math.max(weight * rate, minimum);
     if (!Number.isFinite(weight) || weight < 0 || !Number.isFinite(amount)) throw new Error('Cân nặng hoặc tiền thanh toán không hợp lệ');
     return { number: index + 1, code: String(item.code), service: 'Hàng TMDT', quantity: 1,
-      weight, rate, amount, date: item.date === 'N/A' ? '' : String(item.date || '') };
+      weight, rate, amount, date: hideArrivalDate ? '' : override || (item.date === 'N/A' ? '' : String(item.date || '')) };
   });
   if (!rows.length || rows.length > 1000) throw new Error('Phiếu cần từ 1 đến 1000 mã tìm được');
-  return { customerCode: String(customer.code), phone, address, minimum, rows,
+  return { customerCode: String(customer.code), phone, address, minimum, rows, hideArrivalDate,
     dateLabel: `Ngày ${part('day')} tháng ${part('month')} năm ${part('year')}`,
     filename: `phieu_xuat_kho_${String(customer.code).replace(/[^A-Za-z0-9_-]/g, '_')}_${part('day')}-${part('month')}-${part('year')}`,
     totalQuantity: rows.length, totalWeight: rows.reduce((sum, row) => sum + row.weight, 0),
@@ -33,6 +42,7 @@ function createInvoice(customer, found, { phone = '', address = '', date = new D
 }
 
 async function invoiceXlsx(invoice) {
+  const columnCount = invoice.hideArrivalDate ? 7 : 8, lastColumn = invoice.hideArrivalDate ? 'G' : 'H';
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'THN'; workbook.calcProperties.fullCalcOnLoad = true;
   const sheet = workbook.addWorksheet('Phiếu xuất kho', {
@@ -41,7 +51,9 @@ async function invoiceXlsx(invoice) {
       fitToHeight: 0, horizontalCentered: true, margins: { left: 0.3, right: 0.3, top: 0.35,
         bottom: 0.35, header: 0.15, footer: 0.15 } }
   });
-  WIDTHS.forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
+  const widths = WIDTHS.slice(0, columnCount);
+  const scale = WIDTHS.reduce((sum, w) => sum + w, 0) / widths.reduce((sum, w) => sum + w, 0);
+  widths.forEach((width, index) => { sheet.getColumn(index + 1).width = width * scale; });
   sheet.getColumn('J').hidden = true;
   sheet.getCell('J1').value = 'Tiền tối thiểu/mã (VNĐ)'; sheet.getCell('J2').value = invoice.minimum;
   const bodyCount = invoice.rows.length, totalRow = 10 + bodyCount, paymentRow = totalRow + 1;
@@ -52,30 +64,30 @@ async function invoiceXlsx(invoice) {
     right: { style: 'thin', color: { argb: 'FF999999' } } };
   for (let r = 1; r <= noticeRow; r++) {
     sheet.getRow(r).height = 18;
-    for (let c = 1; c <= 8; c++) {
+    for (let c = 1; c <= columnCount; c++) {
       const cell = sheet.getCell(r, c);
       cell.font = { name: 'Times New Roman', size: 11 };
       cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     }
   }
-  sheet.mergeCells('C1:H2'); sheet.getCell('C1').value = branding.addresses;
+  sheet.mergeCells(`C1:${lastColumn}2`); sheet.getCell('C1').value = branding.addresses;
   sheet.getRow(2).height = 15.95;
-  sheet.mergeCells('C3:H3'); sheet.getCell('C3').value = branding.email;
+  sheet.mergeCells(`C3:${lastColumn}3`); sheet.getCell('C3').value = branding.email;
   const imageId = workbook.addImage({ filename: logo, extension: 'png' });
   sheet.addImage(imageId, { tl: { col: 0, row: 0 }, ext: { width: 159, height: 71 }, editAs: 'oneCell' });
-  sheet.mergeCells('A5:H5'); sheet.getCell('A5').value = `PHIẾU XUẤT KHO\n${invoice.dateLabel}`;
+  sheet.mergeCells(`A5:${lastColumn}5`); sheet.getCell('A5').value = `PHIẾU XUẤT KHO\n${invoice.dateLabel}`;
   sheet.getCell('A5').font = { name: 'Times New Roman', size: 12, bold: true };
   sheet.getRow(5).height = 53.25;
-  sheet.mergeCells('A6:H6'); sheet.getCell('A6').value = 'Người Nhận: ' + invoice.customerCode;
+  sheet.mergeCells(`A6:${lastColumn}6`); sheet.getCell('A6').value = 'Người Nhận: ' + invoice.customerCode;
   sheet.getCell('A6').alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
   sheet.mergeCells('A7:D7'); sheet.getCell('A7').value = 'SĐT: ' + invoice.phone;
-  sheet.mergeCells('E7:H7'); sheet.getCell('E7').value = 'Địa Chỉ: ' + invoice.address;
+  sheet.mergeCells(`E7:${lastColumn}7`); sheet.getCell('E7').value = 'Địa Chỉ: ' + invoice.address;
   ['A7', 'E7'].forEach(cell => { sheet.getCell(cell).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true }; });
   sheet.getRow(7).height = Math.max(22, Math.ceil(invoice.address.length / 40) * 15);
-  HEADERS.forEach((value, index) => { sheet.getCell(9, index + 1).value = value; });
+  HEADERS.slice(0, columnCount).forEach((value, index) => { sheet.getCell(9, index + 1).value = value; });
   sheet.getRow(9).height = 34.5;
   for (let r = 9; r <= paymentRow; r++) {
-    for (let c = 1; c <= 8; c++) sheet.getCell(r, c).border = border;
+    for (let c = 1; c <= columnCount; c++) sheet.getCell(r, c).border = border;
   }
   sheet.getRow(9).eachCell(cell => { cell.font = { name: 'Times New Roman', size: 11, bold: true }; });
   for (let i = 0; i < bodyCount; i++) {
@@ -86,7 +98,7 @@ async function invoiceXlsx(invoice) {
     sheet.getCell(`F${r}`).numFmt = '#,##0'; sheet.getCell(`G${r}`).numFmt = '#,##0';
     if (!row) continue;
     [row.number, row.code, row.service, row.quantity, row.weight, row.rate,
-      { formula: `MAX(E${r}*F${r},$J$2)`, result: row.amount }, row.date]
+      { formula: `MAX(E${r}*F${r},$J$2)`, result: row.amount }, row.date].slice(0, columnCount)
       .forEach((value, c) => { sheet.getCell(r, c + 1).value = value; });
   }
   sheet.mergeCells(`A${totalRow}:C${totalRow}`); sheet.getCell(`A${totalRow}`).value = 'Tổng';
@@ -97,27 +109,27 @@ async function invoiceXlsx(invoice) {
   sheet.getCell(`G${paymentRow}`).value = { formula: `G${totalRow}`, result: invoice.totalPayment };
   for (const r of [totalRow, paymentRow]) {
     sheet.getRow(r).height = r === totalRow ? 24 : 25.5;
-    for (let c = 1; c <= 8; c++) sheet.getCell(r, c).font = { name: 'Times New Roman', size: 11, bold: true };
+    for (let c = 1; c <= columnCount; c++) sheet.getCell(r, c).font = { name: 'Times New Roman', size: 11, bold: true };
     sheet.getCell(`A${r}`).alignment = { horizontal: 'left', vertical: 'middle' };
     sheet.getCell(`G${r}`).numFmt = '#,##0';
   }
   sheet.getCell(`E${totalRow}`).numFmt = '0.0';
   sheet.getCell(`G${paymentRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
   sheet.getCell(`G${paymentRow}`).font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: 'FFFF0000' } };
-  for (const [range, label] of [[`B${signRow}:D${signRow}`, 'Người xuất kho'], [`F${signRow}:H${signRow}`, 'Người nhận hàng'],
-    [`B${signRow + 1}:D${signRow + 1}`, '(ký, họ tên)'], [`F${signRow + 1}:H${signRow + 1}`, '(ký, họ tên)']]) {
+  for (const [range, label] of [[`B${signRow}:D${signRow}`, 'Người xuất kho'], [`F${signRow}:${lastColumn}${signRow}`, 'Người nhận hàng'],
+    [`B${signRow + 1}:D${signRow + 1}`, '(ký, họ tên)'], [`F${signRow + 1}:${lastColumn}${signRow + 1}`, '(ký, họ tên)']]) {
     sheet.mergeCells(range); const cell = sheet.getCell(range.split(':')[0]); cell.value = label;
     cell.font = { name: 'Times New Roman', size: 11, bold: !label.startsWith('(') };
   }
   sheet.getCell(`A${noticeHeading}`).value = 'Lưu ý:';
   sheet.getCell(`A${noticeHeading}`).font = { name: 'Times New Roman', size: 11, bold: true, italic: true, color: { argb: 'FFFF0000' } };
-  sheet.mergeCells(`A${noticeHeading}:H${noticeHeading}`);
+  sheet.mergeCells(`A${noticeHeading}:${lastColumn}${noticeHeading}`);
   sheet.getCell(`A${noticeHeading}`).alignment = { horizontal: 'left', vertical: 'middle' };
-  sheet.mergeCells(`A${noticeRow}:H${noticeRow}`); sheet.getCell(`A${noticeRow}`).value = branding.notice;
+  sheet.mergeCells(`A${noticeRow}:${lastColumn}${noticeRow}`); sheet.getCell(`A${noticeRow}`).value = branding.notice;
   sheet.getCell(`A${noticeRow}`).font = { name: 'Times New Roman', size: 11, italic: true };
   sheet.getCell(`A${noticeRow}`).alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
   sheet.getRow(noticeRow).height = 176.25;
-  sheet.pageSetup.printArea = `A1:H${noticeRow}`; sheet.pageSetup.printTitlesRow = '9:9';
+  sheet.pageSetup.printArea = `A1:${lastColumn}${noticeRow}`; sheet.pageSetup.printTitlesRow = '9:9';
   sheet.headerFooter.oddFooter = '&RTrang &P / &N';
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
@@ -132,7 +144,8 @@ function invoicePdf(invoice) {
       doc.registerFont('body', fontPath('Regular')); doc.registerFont('bold', fontPath('Bold'));
       doc.registerFont('italic', fontPath('Italic'));
       const left = 28, width = doc.page.width - 56, bottom = doc.page.height - 45;
-      const relative = WIDTHS.map(w => w * 7 + 5), full = relative.reduce((sum, w) => sum + w, 0);
+      const columnCount = invoice.hideArrivalDate ? 7 : 8;
+      const relative = WIDTHS.slice(0, columnCount).map(w => w * 7 + 5), full = relative.reduce((sum, w) => sum + w, 0);
       const cols = relative.map(w => w / full * width), xs = [left];
       cols.forEach(w => xs.push(xs.at(-1) + w));
       let y;
@@ -156,7 +169,7 @@ function invoicePdf(invoice) {
         text(phoneText, left, contactY, width * 0.4, { align: 'left', size: 9 });
         text(addressText, left + width * 0.45, contactY, width * 0.55, { align: 'left', size: 9 });
         y = contactY + Math.max(16, addressHeight, phoneHeight) + 13;
-        row(HEADERS, 36, true);
+        row(HEADERS.slice(0, columnCount), 36, true);
       }
       function row(values, height = 20, bold = false) {
         values.forEach((value, i) => {
@@ -173,7 +186,7 @@ function invoicePdf(invoice) {
       function newPage() { doc.addPage(); header(true); }
       function valuesFor(item) {
         return item ? [item.number, item.code, item.service, item.quantity, item.weight.toFixed(1),
-          item.rate.toLocaleString('vi-VN'), item.amount.toLocaleString('vi-VN'), item.date]
+          item.rate.toLocaleString('vi-VN'), item.amount.toLocaleString('vi-VN'), item.date].slice(0, columnCount)
           : ['', '', '', '', '', '', '', ''];
       }
       function heightFor(values) {
@@ -211,7 +224,7 @@ function invoicePdf(invoice) {
         }
         if (yellow) doc.rect(xs[6], y, cols[6], h).fillAndStroke('#FFFF00', '#999999');
         else doc.rect(xs[6], y, cols[6], h).stroke();
-        doc.rect(xs[7], y, cols[7], h).stroke();
+        if (!invoice.hideArrivalDate) doc.rect(xs[7], y, cols[7], h).stroke();
         const formatted = value.toLocaleString('vi-VN');
         let size = 8.5; doc.font('bold').fontSize(size);
         while (doc.widthOfString(formatted) > cols[6] - 4 && size > 4) { size -= 0.25; doc.fontSize(size); }
@@ -238,4 +251,4 @@ function invoicePdf(invoice) {
     } catch (error) { doc.destroy(); reject(error); }
   });
 }
-module.exports = { createInvoice, invoiceXlsx, invoicePdf };
+module.exports = { createInvoice, invoiceXlsx, invoicePdf, validArrivalDate };

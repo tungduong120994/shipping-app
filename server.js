@@ -133,7 +133,10 @@ app.post('/api/search-codes', async (req, res) => {
 });
 let invoiceExports = 0;
 app.post('/api/invoices/export', async (req, res) => {
-  const { sheetId, customerId, items, format, phone = '', address = '', minPrice, pricePerWeight } = req.body || {};
+  const { sheetId, customerId, items, format, phone = '', address = '', minPrice, pricePerWeight,
+    hideArrivalDate = false, arrivalDate = '' } = req.body || {};
+  const { validArrivalDate } = require('./invoice-documents');
+  if (typeof hideArrivalDate !== 'boolean' || !validArrivalDate(arrivalDate)) return invalid(res, 'Ngày hàng về kho không hợp lệ');
   if (!validSheetId(sheetId) || !['xlsx', 'pdf'].includes(format) ||
       !/^\d+$/.test(String(customerId)) || !Number.isSafeInteger(Number(customerId)) || Number(customerId) < 1 ||
       !Array.isArray(items) || !items.length || items.length > 1000 ||
@@ -162,7 +165,7 @@ app.post('/api/invoices/export', async (req, res) => {
       return old.date !== item.date || Number(String(old.totalWeight).replace(',', '.')) !== Number(item.totalWeight.replace(',', '.'));
     })) return res.status(409).json({ success: false, error: 'Ngày hoặc cân nặng đã cập nhật. Vui lòng tìm kiếm lại trước khi xuất phiếu' });
     const { createInvoice, invoiceXlsx, invoicePdf } = require('./invoice-documents');
-    const invoice = createInvoice(customer, result.found, { phone: phone.trim(), address: address.trim() });
+    const invoice = createInvoice(customer, result.found, { phone: phone.trim(), address: address.trim(), hideArrivalDate, arrivalDate });
     const file = format === 'xlsx' ? await invoiceXlsx(invoice) : await invoicePdf(invoice);
     res.type(format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf');
     res.attachment(`${invoice.filename}.${format}`); res.send(file);
