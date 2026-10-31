@@ -13,6 +13,10 @@
         .tab-navigation { display: flex; border-bottom: 2px solid #ddd; margin-bottom: 20px; gap: 10px; }
         .tab-navigation { flex-wrap: wrap; }
         button:disabled { opacity: 0.55; cursor: wait; }
+        .customer-combo { position:relative; }
+        .customer-options { position:absolute; top:100%; left:0; right:0; z-index:20; max-height:260px; overflow:auto; background:white; border:1px solid #aaa; border-radius:4px; box-shadow:0 4px 10px #0002; }
+        .customer-option { padding:10px; cursor:pointer; overflow-wrap:anywhere; }
+        .customer-option:hover, .customer-option[aria-selected="true"] { background:#e8f1ff; }
         .tab-button { padding: 12px 20px; background: none; border: none; cursor: pointer; font-size: 16px; border-bottom: 3px solid transparent; transition: all 0.3s; color: #666; }
         .tab-button:hover { color: #007bff; }
         .tab-button.active { color: #007bff; border-bottom-color: #007bff; font-weight: bold; }
@@ -83,10 +87,12 @@ VD6640(78983347038248)
                 <h2>Tạo Phiếu Xuất Kho</h2>
                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
                     <div>
-                        <label for="invoiceCustomerSearch">Tìm mã khách hàng:</label>
-                        <input id="invoiceCustomerSearch" type="search" placeholder="Gõ số hoặc mã, VD: 125 hoặc TD" oninput="filterInvoiceCustomers()" autocomplete="off" aria-controls="invoiceCustomer" />
-                        <label for="invoiceCustomer">Chọn Khách Hàng:</label>
-                        <select id="invoiceCustomer" style="padding: 10px; width: 100%; border: 1px solid #ddd; border-radius: 4px;">
+                        <label for="invoiceCustomerSearch">Chọn Khách Hàng:</label>
+                        <div class="customer-combo" id="invoiceCustomerCombo">
+                            <input id="invoiceCustomerSearch" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="invoiceCustomerOptions" placeholder="Chọn hoặc gõ mã khách hàng…" autocomplete="off" oninput="inputInvoiceCustomer()" onfocus="openInvoiceCustomers()" onkeydown="invoiceCustomerKeydown(event)" style="margin:0;" />
+                            <div id="invoiceCustomerOptions" class="customer-options" role="listbox" hidden></div>
+                        </div>
+                        <select id="invoiceCustomer" hidden aria-hidden="true" tabindex="-1">
                             <option value="">-- Chọn khách hàng --</option>
                         </select>
                         <small id="invoiceCustomerSearchStatus" role="status"></small>

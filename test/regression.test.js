@@ -122,6 +122,36 @@ function frontend() {
   return { context, node };
 }
 
+test('customer autocomplete filters codes and commits only a chosen suggestion', () => {
+  const { context, node } = frontend();
+  for (const id of ['invoiceCustomerSearch', 'invoiceCustomerOptions']) {
+    node(id).setAttribute = function (key, value) { this[key] = value; };
+    node(id).removeAttribute = function (key) { delete this[key]; };
+  }
+  node('invoiceCustomerSearch').select = () => {};
+  vm.runInContext(`invoiceCustomers = [{ id: 1, code: 'TD125', minLevel: 0, pricePerWeight: 25 },
+    { id: 2, code: 'TD9125', minLevel: 30000, pricePerWeight: 50 },
+    { id: 3, code: 'AB77', minLevel: 0, pricePerWeight: 27 }];`, context);
+  node('invoiceCustomerSearch').value = '125';
+  context.inputInvoiceCustomer();
+  assert.equal(vm.runInContext('customerMatches.length', context), 2);
+  assert.equal(node('invoiceCustomer').value, '');
+  context.chooseInvoiceCustomer(1);
+  assert.equal(node('invoiceCustomer').value, '2');
+  assert.ok(node('invoiceCustomerSearch').value.includes('TD9125'));
+  assert.equal(node('invoiceCustomerOptions').hidden, true);
+  node('invoiceCustomerSearch').value = 'ab';
+  context.inputInvoiceCustomer();
+  assert.equal(node('invoiceCustomer').value, '');
+  assert.equal(vm.runInContext('customerMatches[0].code', context), 'AB77');
+  context.invoiceCustomerKeydown({ key: 'Enter', preventDefault() {} });
+  assert.equal(node('invoiceCustomer').value, '3');
+  node('invoiceCustomerSearch').value = 'no-match';
+  context.inputInvoiceCustomer();
+  assert.equal(vm.runInContext('customerMatches.length', context), 0);
+  assert.equal(node('invoiceCustomer').value, '');
+});
+
 test('PDF export submits current invoice and ignores download after inputs are cleared', async () => {
   const { context, node } = frontend();
   node('invoiceCustomer').value = '7';

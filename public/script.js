@@ -136,12 +136,74 @@ function switchTab(tabName, clickEvent) {
 // ==================== PHIẾU XUẤT KHO ====================
 let invoiceResults = [];
 let invoiceCustomers = [];
+let customerMatches = [], customerActiveIndex = -1;
+
+function customerOptionLabel(customer) {
+    return `${customer.code} (tối thiểu ${formatMoney(customer.minLevel)}đ - ${formatMoney(normalizeVND(customer.pricePerWeight))}đ/kg)`;
+}
+function closeInvoiceCustomers() {
+    document.getElementById('invoiceCustomerOptions').hidden = true;
+    const input = document.getElementById('invoiceCustomerSearch');
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+}
+function renderCustomerSuggestions(query) {
+    customerMatches = invoiceCustomers.filter(customer => String(customer.code).toLocaleLowerCase('vi-VN').includes(query));
+    customerActiveIndex = -1;
+    const list = document.getElementById('invoiceCustomerOptions');
+    list.innerHTML = customerMatches.length ? customerMatches.map((customer, index) =>
+        `<div id="customer-option-${index}" class="customer-option" role="option" aria-selected="false" data-customer-index="${index}">${AppUtils.escapeHTML(customerOptionLabel(customer))}</div>`).join('')
+        : '<div class="customer-option">Không có mã khách hàng phù hợp</div>';
+    list.querySelectorAll('[data-customer-index]').forEach(option => option.addEventListener('click', () => chooseInvoiceCustomer(Number(option.dataset.customerIndex))));
+    list.hidden = false;
+    const input = document.getElementById('invoiceCustomerSearch');
+    input.setAttribute('aria-expanded', 'true'); input.removeAttribute('aria-activedescendant');
+    document.getElementById('invoiceCustomerSearchStatus').textContent = `${customerMatches.length}/${invoiceCustomers.length} khách hàng`;
+}
+function openInvoiceCustomers() {
+    const input = document.getElementById('invoiceCustomerSearch');
+    renderCustomerSuggestions(document.getElementById('invoiceCustomer').value ? '' : input.value.trim().toLocaleLowerCase('vi-VN'));
+    input.select();
+}
+function inputInvoiceCustomer() {
+    const select = document.getElementById('invoiceCustomer');
+    if (select.value) { select.value = ''; changeInvoiceCustomer(); }
+    renderCustomerSuggestions(document.getElementById('invoiceCustomerSearch').value.trim().toLocaleLowerCase('vi-VN'));
+}
+function chooseInvoiceCustomer(index) {
+    const customer = customerMatches[index];
+    if (!customer) return;
+    document.getElementById('invoiceCustomer').value = String(customer.id);
+    document.getElementById('invoiceCustomerSearch').value = customerOptionLabel(customer);
+    closeInvoiceCustomers();
+    changeInvoiceCustomer();
+}
+function invoiceCustomerKeydown(event) {
+    const list = document.getElementById('invoiceCustomerOptions');
+    if (event.key === 'Escape' || event.key === 'Tab') { closeInvoiceCustomers(); return; }
+    if (event.key === 'Enter' && !list.hidden) {
+        event.preventDefault();
+        if (customerActiveIndex >= 0) chooseInvoiceCustomer(customerActiveIndex);
+        else if (customerMatches.length === 1) chooseInvoiceCustomer(0);
+        return;
+    }
+    if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+    event.preventDefault();
+    if (list.hidden) openInvoiceCustomers();
+    if (!customerMatches.length) return;
+    customerActiveIndex = event.key === 'ArrowDown' ? (customerActiveIndex + 1) % customerMatches.length
+        : (customerActiveIndex <= 0 ? customerMatches.length - 1 : customerActiveIndex - 1);
+    list.querySelectorAll('[data-customer-index]').forEach((option, index) => {
+        option.setAttribute('aria-selected', String(index === customerActiveIndex));
+        if (index === customerActiveIndex) option.scrollIntoView({ block: 'nearest' });
+    });
+    document.getElementById('invoiceCustomerSearch').setAttribute('aria-activedescendant', 'customer-option-' + customerActiveIndex);
+}
 
 function filterInvoiceCustomers() {
-    const query = document.getElementById('invoiceCustomerSearch').value.trim().toLocaleLowerCase('vi-VN');
     const select = document.getElementById('invoiceCustomer');
     const previous = select.value;
-    const matches = invoiceCustomers.filter(customer => String(customer.code).toLocaleLowerCase('vi-VN').includes(query));
+    const matches = invoiceCustomers;
     select.innerHTML = '<option value="">-- Chọn khách hàng --</option>';
     matches.forEach(customer => {
         const option = document.createElement('option');
@@ -158,6 +220,7 @@ function filterInvoiceCustomers() {
     document.getElementById('invoiceCustomerSearchStatus').textContent = matches.length
         ? `${matches.length}/${invoiceCustomers.length} khách hàng`
         : 'Không có mã khách hàng phù hợp';
+    closeInvoiceCustomers();
 }
 
 // Load customers for invoice dropdown
@@ -749,6 +812,9 @@ function deleteCustomer(id) {
 
 // Load customers when page loads
 document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('click', event => {
+        if (!document.getElementById('invoiceCustomerCombo').contains(event.target)) closeInvoiceCustomers();
+    });
     loadSheetSources();
     document.getElementById('invoiceCustomer').addEventListener('change', changeInvoiceCustomer);
     document.getElementById('invoiceCodesInput').addEventListener('input', clearInvoiceSearch);
