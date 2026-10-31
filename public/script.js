@@ -135,26 +135,43 @@ function switchTab(tabName, clickEvent) {
 
 // ==================== PHIẾU XUẤT KHO ====================
 let invoiceResults = [];
+let invoiceCustomers = [];
+
+function filterInvoiceCustomers() {
+    const query = document.getElementById('invoiceCustomerSearch').value.trim().toLocaleLowerCase('vi-VN');
+    const select = document.getElementById('invoiceCustomer');
+    const previous = select.value;
+    const matches = invoiceCustomers.filter(customer => String(customer.code).toLocaleLowerCase('vi-VN').includes(query));
+    select.innerHTML = '<option value="">-- Chọn khách hàng --</option>';
+    matches.forEach(customer => {
+        const option = document.createElement('option');
+        const normalizedPrice = normalizeVND(customer.pricePerWeight);
+        option.value = customer.id;
+        option.textContent = `${customer.code} (tối thiểu ${formatMoney(customer.minLevel)}đ - ${formatMoney(normalizedPrice)}đ/kg)`;
+        option.dataset.minLevel = customer.minLevel;
+        option.dataset.pricePerWeight = normalizedPrice;
+        option.dataset.code = customer.code;
+        select.appendChild(option);
+    });
+    select.value = matches.some(customer => String(customer.id) === previous) ? previous : '';
+    if (previous && !select.value) changeInvoiceCustomer();
+    document.getElementById('invoiceCustomerSearchStatus').textContent = matches.length
+        ? `${matches.length}/${invoiceCustomers.length} khách hàng`
+        : 'Không có mã khách hàng phù hợp';
+}
 
 // Load customers for invoice dropdown
 function loadInvoiceCustomers() {
     clearInvoiceSearch();
+    invoiceCustomers = [];
+    document.getElementById('invoiceCustomerSearch').value = '';
+    filterInvoiceCustomers();
     return fetch('/api/customers')
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                const select = document.getElementById('invoiceCustomer');
-                select.innerHTML = '<option value="">-- Chọn khách hàng --</option>';
-                data.customers.forEach(customer => {
-                    const option = document.createElement('option');
-                    const normalizedPrice = normalizeVND(customer.pricePerWeight);
-                    option.value = customer.id;
-                    option.textContent = `${customer.code} (tối thiểu ${formatMoney(customer.minLevel)}đ - ${formatMoney(normalizedPrice)}đ/kg)`;
-                    option.dataset.minLevel = customer.minLevel;
-                    option.dataset.pricePerWeight = normalizedPrice;
-                    option.dataset.code = customer.code;
-                    select.appendChild(option);
-                });
+                invoiceCustomers = data.customers;
+                filterInvoiceCustomers();
             }
         })
         .catch(error => console.error('Error loading customers:', error));

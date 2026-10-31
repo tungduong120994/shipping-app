@@ -83,10 +83,13 @@ VD6640(78983347038248)
                 <h2>Tạo Phiếu Xuất Kho</h2>
                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px;">
                     <div>
-                        <label>Chọn Khách Hàng:</label>
+                        <label for="invoiceCustomerSearch">Tìm mã khách hàng:</label>
+                        <input id="invoiceCustomerSearch" type="search" placeholder="Gõ số hoặc mã, VD: 125 hoặc TD" oninput="filterInvoiceCustomers()" autocomplete="off" aria-controls="invoiceCustomer" />
+                        <label for="invoiceCustomer">Chọn Khách Hàng:</label>
                         <select id="invoiceCustomer" style="padding: 10px; width: 100%; border: 1px solid #ddd; border-radius: 4px;">
                             <option value="">-- Chọn khách hàng --</option>
                         </select>
+                        <small id="invoiceCustomerSearchStatus" role="status"></small>
                     </div>
                     <div>
                         <label>SĐT Người Nhận:</label>
