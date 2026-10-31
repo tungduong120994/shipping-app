@@ -24,16 +24,33 @@ test('real XLSX retains tracking text, formulas, template logo and print layout'
   assert.equal(sheet.getCell('B10').value, '00079036906835213');
   assert.equal(sheet.getCell('B10').numFmt, '@');
   assert.deepEqual(sheet.getCell('G10').value, { formula: 'MAX(E10*F10,$J$2)', result: 20000 });
-  assert.equal(sheet.getCell('G19').value.result, 20000);
-  assert.equal(sheet.getCell('G19').fill.fgColor.argb, 'FFFFFF00');
+  assert.equal(sheet.getCell('G12').value.result, 20000);
+  assert.equal(sheet.getCell('G12').fill.fgColor.argb, 'FFFFFF00');
   assert.equal(sheet.getCell('A6').value, 'Người Nhận: KH_MAU');
   assert.ok(sheet.getCell('A5').value.includes('2026'));
   assert.equal(sheet.getImages().length, 1);
-  assert.equal(sheet.pageSetup.printArea, 'A1:H29');
+  assert.equal(sheet.pageSetup.printArea, 'A1:H22');
   assert.equal(sheet.getColumn('J').hidden, true);
-  assert.equal(sheet.getCell('B11').value, null);
-  assert.ok(sheet.getCell('A29').value.length > 100);
+  assert.equal(sheet.getCell('A11').value, 'Tổng');
+  assert.ok(sheet.getCell('A22').value.length > 100);
   const pdf = await invoicePdf(invoice);
   assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
   assert.ok(pdf.length > 10000);
+});
+
+test('two exported shipments produce exactly two body rows followed by totals', async () => {
+  const invoice = createInvoice({ code: 'KH', minLevel: 20000, pricePerWeight: 27 },
+    [{ code: '79036906835213', totalWeight: '0.5', date: '4/10' },
+      { code: '79036906835214', totalWeight: '1.2', date: '5/10' }]);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await invoiceXlsx(invoice));
+  const sheet = workbook.worksheets[0];
+  assert.equal(sheet.getCell('B10').value, invoice.rows[0].code);
+  assert.equal(sheet.getCell('B11').value, invoice.rows[1].code);
+  assert.equal(sheet.getCell('A12').value, 'Tổng');
+  assert.deepEqual(sheet.getCell('G12').value, { formula: 'SUM(G10:G11)', result: invoice.totalPayment });
+  assert.equal(sheet.getCell('A13').value, 'Tổng tiền cần thanh toán');
+  assert.equal(sheet.getCell('G13').value.result, invoice.totalPayment);
+  assert.equal(sheet.getCell('A14').border?.bottom, undefined);
+  assert.equal(sheet.pageSetup.printArea, 'A1:H23');
 });

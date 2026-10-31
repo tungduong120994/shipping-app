@@ -44,7 +44,7 @@ async function invoiceXlsx(invoice) {
   WIDTHS.forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
   sheet.getColumn('J').hidden = true;
   sheet.getCell('J1').value = 'Tiền tối thiểu/mã (VNĐ)'; sheet.getCell('J2').value = invoice.minimum;
-  const bodyCount = Math.max(8, invoice.rows.length), totalRow = 10 + bodyCount, paymentRow = totalRow + 1;
+  const bodyCount = invoice.rows.length, totalRow = 10 + bodyCount, paymentRow = totalRow + 1;
   const signRow = totalRow + 3, noticeHeading = totalRow + 10, noticeRow = totalRow + 11;
   const border = { top: { style: 'thin', color: { argb: 'FF999999' } },
     left: { style: 'thin', color: { argb: 'FF999999' } },
@@ -189,7 +189,6 @@ function invoicePdf(invoice) {
       const footerHeight = 44 + 90 + 30 + noticeHeight;
       const firstDataY = y;
       const rows = [...invoice.rows];
-      while (rows.length < 8) rows.push(null);
       const heights = rows.map(item => heightFor(valuesFor(item)));
       let remainingHeight = heights.reduce((sum, h) => sum + h, 0);
       rows.forEach((item, index) => {
